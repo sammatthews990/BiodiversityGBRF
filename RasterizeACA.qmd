@@ -1,0 +1,358 @@
+---
+title: "Geomorph + Bathymetry (Leaflet)"
+format:
+  html:
+    theme: 
+      light: cosmo      # pick any light Bootswatch theme
+      dark: solar      # pick any dark Bootswatch theme
+    toc: true
+    code-fold: show
+    self-contained: true
+execute:
+  echo: true
+  warning: false
+  message: false
+---
+
+```{r}
+# Packages ---------------------------------------------------------------
+# (uncomment next 2 lines if you want auto-install)
+# pkgs <- c("leaflet","terra","sf","leafem","raster")
+# to_install <- pkgs[!sapply(pkgs, requireNamespace, quietly = TRUE)]; if (length(to_install)) install.packages(to_install)
+
+library(terra)    # raster
+library(sf)       # vectors
+library(leaflet)  # web map
+library(leafem)   # helpers for raster in leaflet
+library(raster)   # addRasterImage prefers RasterLayer
+library(igraph)
+```
+
+## Read data
+
+```{r}
+# Adjust paths if needed; by default Quarto uses the doc's folder as the working dir.
+bathy    <- terra::rast("bathymetry_0.tif")
+geomorph <- sf::st_read("geomorphic.geojson", quiet = TRUE)
+reef     <- sf::st_read("reefextent.shp",  quiet = TRUE)
+
+# Boundary used to stamp real-world extent onto bathy (since TIFF lacks GeoTransform)
+bnd <- sf::st_read("boundary.geojson", quiet = TRUE)
+if (is.na(sf::st_crs(bnd))) sf::st_crs(bnd) <- 4326
+bnd <- sf::st_transform(bnd, 4326)
+bb  <- sf::st_bbox(bnd)   # xmin, ymin, xmax, ymax
+```
+
+## Georeference bathymetry and harmonise CRS
+
+```{r}
+# The TIFF has image-space extents; stamp the boundary bbox + CRS onto it
+terra::ext(bathy) <- terra::ext(bb["xmin"], bb["xmax"], bb["ymin"], bb["ymax"])
+terra::crs(bathy) <- sf::st_crs(bnd)$wkt
+
+# Ensure vectors are in WGS84 too
+if (sf::st_crs(geomorph)$epsg != 4326) geomorph <- sf::st_transform(geomorph, 4326)
+if (sf::st_crs(reef)$epsg     != 4326) reef     <- sf::st_transform(reef, 4326)
+bathy <- terra::flip(bathy, "vertical")
+# Quick sanity plots (optional)
+plot(bathy); plot(sf::st_geometry(bnd), add = TRUE, border = "orange", lwd = 2);plot(sf::st_geometry(reef), add = TRUE, border = 'red', lwd = 2)
+```
+
+## Palettes and helpers
+
+```{r}
+#| label: palettes
+# Convert bathy to RasterLayer for addRasterImage()
+rbathy <- raster::raster(bathy)
+
+# Bathy palette
+rng <- as.numeric(terra::global(bathy, "range", na.rm = TRUE))
+pal_bathy <- colorNumeric("Blues", rng, na.color = "transparent")
+
+# Polygon palette (for original geomorph polygons)
+pal_geom <- colorFactor("Set2", sort(unique(geomorph$class)))
+```
+
+## Rasterise geomorph to bathy grid
+
+```{r}
+#| label: rasterise-geomorph
+
+geomorph <- sf::st_make_valid(geomorph)
+geomorph <- sf::st_transform(geomorph, crs(bathy))
+
+# integer codes for categorical raster
+field   <- "class"
+classes <- sort(unique(geomorph[[field]]))
+lut     <- data.frame(code = seq_along(classes), class = classes)
+
+geomorph$code <- lut$code[ match(geomorph[[field]], lut$class) ]
+
+# Rasterise to bathy grid (same extent/res/CRS)
+r_geom <- terra::rasterize(
+  x = terra::vect(geomorph),
+  y = bathy,
+  field = "code",
+  background = NA,
+  touches = TRUE
+)
+
+# Mask to polygon footprint (clean edges)
+r_geom <- terra::mask(r_geom, terra::vect(geomorph))
+
+# Palette for the rasterised classes
+pal_geom_r <- colorFactor("Set2", domain = lut$code)
+
+# Convert to RasterLayer for Leaflet
+r_geom_rl <- raster::raster(r_geom)
+
+writeRaster(r_geom_rl, "output_file.tif", format = "GTiff", overwrite = TRUE)
+
+test <- raster::raster(terra::rast("output_file.tif"))
+crs(test)
+test <- raster::raster(terra::rast("geomorph_gbr10_res.tif"))
+crs(test)
+```
+
+```{r}
+# Reference raster for the second resolution
+gbr10 <- terra::rast("GBR10 GBRMP Geomorphic.tif")
+
+# helper: a boundary polygon describing the bathy area (you already have `bnd` in EPSG:4326)
+stopifnot(!is.null(bnd))
+
+if (terra::compareGeom(bathy, gbr10, stopOnError = FALSE)) {
+  # -------- Case A: same CRS/units --------
+  # Make a template with bathy's extent/CRS but GBR10's cell size
+  tmpl2 <- terra::rast(bathy)
+  terra::res(tmpl2) <- terra::res(gbr10)   # copy cell size
+  # Rasterise geomorph onto tmpl2
+  geomorph_4326 <- sf::st_transform(geomorph, terra::crs(tmpl2))
+  r_geom_gbr10res <- terra::rasterize(
+    x = terra::vect(geomorph_4326),
+    y = tmpl2,
+    field = "code",
+    background = NA,
+    touches = TRUE
+  )
+  r_geom_gbr10res <- terra::mask(r_geom_gbr10res, terra::vect(bnd))
+
+} else {
+  # -------- Case B: different CRS/units --------
+  # Build a template in GBR10 CRS that covers the SAME geographic area as bathy
+  bnd_gbr10 <- sf::st_transform(bnd, terra::crs(gbr10))
+  bb10 <- sf::st_bbox(bnd_gbr10)
+
+  tmpl2 <- terra::rast(
+    xmin = bb10["xmin"], xmax = bb10["xmax"],
+    ymin = bb10["ymin"], ymax = bb10["ymax"],
+    crs  = terra::crs(gbr10)
+  )
+  terra::res(tmpl2) <- terra::res(gbr10)   # match cell size (in metres, etc.)
+  terra::origin(tmpl2) <- c(bb10["xmin"], bb10["ymin"])  # anchor to SW corner
+
+  # Rasterise in GBR10 CRS
+  geomorph_gbr10 <- sf::st_transform(geomorph, terra::crs(gbr10))
+  r_geom_gbr10res_gbr <- terra::rasterize(
+    x = terra::vect(geomorph_gbr10),
+    y = tmpl2,
+    field = "code",
+    background = NA,
+    touches = TRUE
+  )
+  r_geom_gbr10res_gbr <- terra::mask(r_geom_gbr10res_gbr, terra::vect(bnd_gbr10))
+
+  # OPTIONAL: reproject back to bathy's CRS for Leaflet stack (nearest neighbour = categorical)
+  r_geom_gbr10res <- terra::project(r_geom_gbr10res_gbr, terra::crs(bathy), method = "near")
+}
+
+# Convert to RasterLayer if you’ll show it with addRasterImage()
+r_geom_gbr10res_rl <- raster::raster(r_geom_gbr10res)
+
+# (Optional) write both out
+terra::writeRaster(r_geom,              "geomorph_bathy_res.tif",  overwrite = TRUE, gdal = "COMPRESS=LZW")
+terra::writeRaster(r_geom_gbr10res,     "geomorph_gbr10_res.tif",  overwrite = TRUE, gdal = "COMPRESS=LZW")
+```
+
+## Reef Layer: Combine Nearby Polygons
+
+```{r}
+#| label: combine-reef-polys
+# User-defined threshold (km)
+reef_merge_km <- 0.3
+reef_merge_m  <- reef_merge_km * 1000
+
+# Work in a projected CRS (meters) for distance-based clustering
+reef_proj <- sf::st_make_valid(reef) |>
+  sf::st_transform(3577)  # GDA94 / Australian Albers (meters)
+
+# Build adjacency: polygons within threshold are connected
+nb <- sf::st_is_within_distance(reef_proj, reef_proj, dist = reef_merge_m)
+
+# Turn adjacency into an undirected graph; extract connected components
+# Build graph correctly (mode="all") and make it undirected
+g     <- igraph::graph_from_adj_list(nb, mode = "all")
+g     <- igraph::as.undirected(g, mode = "collapse")
+comp  <- igraph::components(g)$membership
+
+reef_proj$cluster_id <- comp
+
+# Union original polygons by cluster to form combined reefs
+reef_combined <- reef_proj |>
+  dplyr::group_by(cluster_id) |>
+  dplyr::summarise(geometry = sf::st_union(geometry), .groups = "drop") |>
+  dplyr::arrange(cluster_id) |>
+  dplyr::mutate(reef_name = sprintf("Reef_%d", dplyr::row_number()))
+
+# Back to WGS84 for Leaflet
+reef_combined_wgs <- sf::st_transform(reef_combined, 4326)
+
+# Palette for reef names (distinct colors for however many clusters you get)
+n_reefs <- nrow(reef_combined_wgs)
+reef_colors <- grDevices::colorRampPalette(
+  c("#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd",
+    "#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf")
+)(max(10, n_reefs))
+pal_reef <- colorFactor(palette = reef_colors,
+                        domain  = reef_combined_wgs$reef_name)
+
+
+```
+
+## Export Reef Layer
+
+```{r}
+#| label: export-reef-combined
+# Ensure clean geometry & attributes before export
+reef_export <- reef_combined_wgs |>
+  sf::st_make_valid() |>
+  sf::st_zm(drop = TRUE, what = "ZM") |>
+  dplyr::mutate(
+    reef_name = as.character(reef_name),    # shapefile likes explicit types
+    reef_id   = dplyr::row_number()
+  )
+
+# 1) GeoJSON (RFC 7946 lon/lat, with bbox)
+sf::st_write(
+  reef_export,
+  dsn = "reef_combined.geojson",
+  driver = "GeoJSON",
+  delete_dsn = TRUE,
+  layer_options = c("RFC7946=YES","WRITE_BBOX=YES")
+)
+
+# 2) ESRI Shapefile (generates .shp/.shx/.dbf/.prj)
+# Note: Shapefile has 10-char field name limit; 'reef_name' is fine (9 chars)
+sf::st_write(
+  reef_export,
+  dsn = "reef_combined.shp",
+  driver = "ESRI Shapefile",
+  delete_dsn = TRUE,
+  layer_options = c("ENCODING=UTF-8")
+)
+
+# (Optional) Zip the shapefile components for sharing
+shp_files <- list.files(
+  pattern = "^reef_combined\\.(shp|shx|dbf|prj|cpg)$",
+  ignore.case = TRUE, full.names = TRUE
+)
+utils::zip("reef_combined_shapefile.zip", shp_files)
+```
+
+## Interactive Leaflet map
+
+```{r}
+#| label: leaflet-map
+#| echo: false
+
+e <- terra::ext(bathy)
+
+m <- leaflet() |>
+  addProviderTiles(providers$Esri.OceanBasemap, group = "Esri Ocean") |>
+  addProviderTiles(providers$Esri.WorldImagery, group = "Esri Satellite") |>
+  addProviderTiles(providers$CartoDB.Positron,  group = "Light") |>
+
+  # Bathymetry (project on the fly)
+  addRasterImage(
+    rbathy,
+    colors  = pal_bathy,
+    opacity = 0.7,
+    project = TRUE,
+    group   = "Bathymetry"
+  ) |>
+
+  # Rasterised geomorph (already in 4326 -> don't project)
+addRasterImage(
+    raster::raster(r_geom),     # bathy grid
+    colors  = pal_geom_r, opacity = 0.6,
+    project = FALSE, method = "ngb",
+    group   = "Geomorphic (bathy cellsize)"
+  ) |>
+  addRasterImage(
+    r_geom_gbr10res_rl,         # GBR10 cell size over the same area
+    colors  = pal_geom_r, opacity = 0.6,
+    project = !terra::is.lonlat(r_geom_gbr10res), method = "ngb",
+    group   = "Geomorphic (GBR10 cellsize)"
+  ) |>
+  
+  #   addRasterImage(
+  #   test,
+  #   colors  = pal_geom_r,
+  #   opacity = 0.6,
+  #   project = FALSE,
+  #   group   = "Geomorphic (rasterised) - Saved"
+  # ) |>
+
+  # Geomorph polygons (for comparison)
+  addPolygons(
+    data = geomorph,
+    stroke = TRUE, weight = 1, color = "#ff6600",
+    fillColor = ~pal_geom(class),
+    fillOpacity = 0.6,
+    group = "Geomorphic zones"
+  ) |>
+
+  # Reef outline
+  addPolygons(
+    data = reef,
+    weight = 2, color = "#ff6600", fill = FALSE,
+    group = "Reef extent"
+  ) |>
+  addPolygons(
+    data = reef_combined_wgs,
+    weight = 1, color = "#222222",
+    fillColor = ~pal_reef(reef_name),
+    fillOpacity = 0.6,
+    label = ~reef_name,
+    highlightOptions = highlightOptions(weight = 2, color = "#000", bringToFront = TRUE),
+    group = "Reefs (combined)"
+  ) |>
+
+  # Legends
+  addLegend(
+    position = "bottomleft",
+    colors   = pal_geom_r(lut$code),
+    labels   = lut$class,
+    title    = "Geomorphic class",
+    opacity  = 1
+  ) |>
+  addLegend(
+    pal = pal_bathy, values = rng, title = "Depth (m)",
+    position = "bottomright", opacity = 1
+  ) |>
+
+  addLayersControl(
+  baseGroups    = c("Esri Ocean", "Esri Satellite", "Light"),
+  overlayGroups = c("Bathymetry",
+                    "Geomorphic zones",
+                    "Geomorphic (bathy cellsize)",
+                    "Geomorphic (GBR10 cellsize)",
+                    #"Geomorphic (rasterised) - Saved",
+                    "Reef extent",
+                    "Reefs (combined)"),
+  options = layersControlOptions(collapsed = FALSE)
+)|>
+  leafem::addMouseCoordinates()
+
+m
+```
