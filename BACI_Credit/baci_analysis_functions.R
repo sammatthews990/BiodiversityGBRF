@@ -161,4 +161,4 @@ run_baci_analysis <- function(
     composite_credit = composite_results$Credit_Score,
     raw_data = observed_data %>% select(Metric, Year, Site_ID, Site_Type, Transect_ID, True_Value, Observed_Value)
   ))
-}```
+}
