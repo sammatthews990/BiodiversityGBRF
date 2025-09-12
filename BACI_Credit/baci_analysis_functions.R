@@ -1,5 +1,12 @@
-
 # baci_analysis_functions.R
+#
+# This script contains the core statistical engine for the BACI Power Simulator.
+# It uses a Bayesian hierarchical model (stan_lmer) to estimate uplift and uncertainty.
+
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(rstanarm)
 
 run_baci_analysis <- function(
     n_sites_ctrl, n_transects, n_years, intervention_year, true_uplift_pct,
@@ -7,12 +14,14 @@ run_baci_analysis <- function(
     spatial_patchiness_sd, temporal_variation_sd
 ) {
   
+  # --- 1. Setup Simulation Parameters ---
   uplift_rate <- true_uplift_pct / 100
   shock_loss <- shock_magnitude_pct / 100
   n_sites_total <- 1 + n_sites_ctrl
   site_ids <- paste("Site", 1:n_sites_total)
   site_types <- c("Treatment", rep("Control", n_sites_ctrl))
   
+  # --- 2. Generate "True" Underlying Coral Cover ---
   true_cover_df <- tibble(Year = 0:n_years) %>%
     crossing(Site_ID = site_ids) %>%
     left_join(tibble(Site_ID = site_ids, Site_Type = site_types), by = "Site_ID") %>%
@@ -28,6 +37,7 @@ run_baci_analysis <- function(
     ungroup() %>%
     mutate(True_Cover = pmin(0.95, pmax(0.01, True_Cover)))
   
+  # --- 3. Apply Exogenous Shock Event ---
   if (shock_type != "No Shock") {
     true_cover_df <- true_cover_df %>%
       mutate(
@@ -42,31 +52,52 @@ run_baci_analysis <- function(
       )
   }
   
+  # --- 4. Simulate the Observation Process (Monitoring) ---
   observed_data <- true_cover_df %>%
+    # We only observe data from Year 1 onwards
+    filter(Year > 0) %>%
     crossing(Transect_ID = 1:n_transects) %>%
-    mutate(Observed_Cover = rnorm(n(), mean = True_Cover, sd = survey_precision_sd))
+    mutate(
+      Observed_Cover = rnorm(n(), mean = True_Cover, sd = survey_precision_sd)
+    )
   
-  baci_data <- observed_data %>%
-    mutate(Period = if_else(Year < intervention_year, "Before", "After")) %>%
-    group_by(Site_ID, Site_Type, Period) %>%
-    summarise(Mean_Cover = mean(Observed_Cover, na.rm = TRUE), .groups = "drop") %>%
-    pivot_wider(names_from = Period, values_from = Mean_Cover) %>%
-    mutate(Change = After - Before)
+  # --- 5. Perform the Bayesian BACI Analysis ---
+  # We only use data from after the intervention starts for this model
+  analysis_data <- observed_data %>%
+    filter(Year >= intervention_year) %>%
+    mutate(Time = Year - intervention_year) # Time since intervention
   
-  treatment_change <- baci_data %>% filter(Site_Type == "Treatment") %>% pull(Change)
-  control_changes <- baci_data %>% filter(Site_Type == "Control") %>% pull(Change)
+  # Fit the Bayesian model
+  # This model tests if the slope over Time is different for the Treatment site
+  baci_model <- stan_lmer(
+    Observed_Cover ~ Time * Site_Type + (Time | Site_ID),
+    data = analysis_data,
+    chains = 2, iter = 1000, refresh = 0, # Keep simulation fast for Shiny
+    cores = getOption("mc.cores", 2)
+  )
   
-  # THE FIX: More robust checking before the t-test
-  if (length(treatment_change) == 1 && !is.na(treatment_change) && sum(!is.na(control_changes)) >= 2) {
-    ttest_result <- t.test(control_changes, mu = treatment_change, alternative = "less", na.action = "na.omit")
-    prob_real_uplift <- 1 - ttest_result$p.value
-    mean_uplift <- treatment_change - mean(control_changes, na.rm = TRUE)
+  # Extract the posterior distribution of the model parameters
+  posterior_draws <- as.data.frame(baci_model)
+  
+  # The key parameter is the interaction term, which represents the uplift
+  uplift_parameter_name <- "Time:Site_TypeTreatment"
+  
+  # Check if the parameter exists (it might not if the model fails)
+  if(uplift_parameter_name %in% names(posterior_draws)) {
+    uplift_draws <- posterior_draws[[uplift_parameter_name]]
+    
+    # The probability of real uplift is the proportion of the posterior > 0
+    prob_real_uplift <- mean(uplift_draws > 0)
+    
+    # The mean uplift is the median of the posterior distribution
+    mean_uplift <- median(uplift_draws)
+    
   } else {
-    prob_real_uplift <- 0.5 
-    mean_uplift <- if(length(treatment_change) == 1) treatment_change - mean(control_changes, na.rm = TRUE) else 0
-    mean_uplift <- ifelse(is.na(mean_uplift), 0, mean_uplift)
+    prob_real_uplift <- 0
+    mean_uplift <- 0
   }
   
+  # --- 6. Calculate Credit Score and Prepare Outputs ---
   credit_score <- mean_uplift * prob_real_uplift
   
   plot_summary <- observed_data %>%
@@ -82,7 +113,6 @@ run_baci_analysis <- function(
     plot_data = plot_summary,
     mean_uplift = mean_uplift,
     prob_real_uplift = prob_real_uplift,
-    credit_score = credit_score,
-    debug_table = baci_data # Return the intermediate data for inspection
+    credit_score = credit_score
   ))
 }
