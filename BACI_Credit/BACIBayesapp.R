@@ -27,19 +27,32 @@ METRIC_DEFINITIONS <- tribble(
   ~Metric,                ~Mean_Baseline, ~Temporal_SD,
   "Coral Cover",          0.30,           0.04,
   "Structural Complexity",0.40,           0.05,
-  "Algal Cover",          0.20,           0.06,
-  "Fish Biomass",         0.50,           0.08,
-  "Fish Diversity",       0.60,           0.07,
-  "Invertebrate Density", 0.35,           0.09
+  "Fish Biomass",         0.50,           0.08
 )
 
 # --- Data Loading for Model Explorer ---
 modelled_data <- readr::read_csv("simdata_ADRIA.csv") %>%
   rename(
-    Year = Year, Reef_Name = Reef, GeomorphicZone = `Geomorphic zone`,
-    Coral_Cover = `Coral Cover`, Diversity = Diversity, Shelter_Volume = `Shelter Volume`,
-    RCI = RCI, site_lat = `site lat`, site_long = `site long`
-  )
+    Year = Year,
+    Reef_Name = Reef,
+    GeomorphicZone = `Geomorphic zone`,
+    Intervention = Intervention,
+    Deployment_Volume = `Deployment Volume`,
+    Coral_Cover = `Coral Cover`,
+    Coral_Cover_sd = `Coral Cover sd`,
+    Diversity = Diversity,
+    Diversity_sd = `Diversity sd`,
+    Shelter_Volume = `Shelter Volume`,
+    Shelter_Volume_sd = `Shelter Volume sd`,
+    RCI = RCI,
+    RCI_sd = `RCI sd`,
+    Deployment_Site_Flag = `deployment site flag`,
+    site_lat = `site lat`,
+    site_long = `site long`
+  ) %>%
+  # Ensure grouping variables are treated as factors for plotting
+  mutate(across(c(Reef_Name, GeomorphicZone, Intervention, Deployment_Site_Flag), as.factor))
+
 
 ui <- page_navbar(
   title = "Coral Reef Analysis Dashboard",
@@ -94,15 +107,33 @@ ui <- page_navbar(
                card(
                  card_header("Filtering Controls"),
                  selectInput("reef_selector", "Reef Name", choices = unique(modelled_data$Reef_Name), multiple = TRUE, selected = unique(modelled_data$Reef_Name)[1]),
-                 checkboxGroupInput("geomorph_selector", "Geomorphic Zone", choices = unique(modelled_data$GeomorphicZone), selected = unique(modelled_data$GeomorphicZone)),
-                 sliderInput("year_selector", "Year Range", min = min(modelled_data$Year), max = max(modelled_data$Year), value = c(min(modelled_data$Year), max(modelled_data$Year)), sep = ""),
-                 selectInput("explorer_metric", "Metric to Plot", choices = c("Coral Cover" = "Coral_Cover", "Diversity" = "Diversity", "Shelter Volume" = "Shelter_Volume", "RCI" = "RCI"), selected = "Coral_Cover")
+                 checkboxGroupInput("geomorph_selector", "Geomorphic Zone", choices = levels(modelled_data$GeomorphicZone), selected = levels(modelled_data$GeomorphicZone)),
+                 sliderInput("year_selector", "Year Range", min = min(modelled_data$Year), max = max(modelled_data$Year), value = c(min(modelled_data$Year), max(modelled_data$Year)), sep = "")
                )
              ),
-             card(card_header("Metric Trends by Geomorphic Zone"), plotOutput("timeSeriesPlot", height = "400px")),
-             card(card_header("Detailed Modelled Data"), DTOutput("dataTableExplorer"))
+             card(
+               card_header(
+                 class = "d-flex justify-content-between align-items-center",
+                 "Metric Trends",
+                 # --- NEW UI CONTROLS FOR THE PLOT ---
+                 div(class = "d-flex",
+                     selectInput("explorer_metric", NULL, 
+                                 choices = c("Coral Cover" = "Coral_Cover", "Diversity" = "Diversity", "Shelter Volume" = "Shelter_Volume", "RCI" = "RCI"), 
+                                 selected = "Coral_Cover", width = "180px"),
+                     selectInput("explorer_color_by", NULL,
+                                 choices = c("Geomorphic Zone" = "GeomorphicZone", "Reef" = "Reef_Name", "Intervention" = "Intervention", "Deployment Flag" = "Deployment_Site_Flag"),
+                                 selected = "GeomorphicZone", width = "180px")
+                 )
+               ),
+               plotOutput("timeSeriesPlot", height = "400px")
+             ),
+             card(
+               card_header("Detailed Modelled Data"),
+               DTOutput("dataTableExplorer")
+             )
            )
   ),
+
   
   # --- TAB 3: Simulated Raw Data ---
   tabPanel("Simulated Raw Data",
@@ -193,22 +224,39 @@ server <- function(input, output, session) {
       )
   })
   
+  # --- UPDATED PLOT LOGIC ---
   output$timeSeriesPlot <- renderPlot({
     df <- filtered_model_data()
     validate(need(nrow(df) > 0, "No data available for the current filter settings."))
     
-    zone_means <- df %>%
-      group_by(Year, GeomorphicZone) %>%
-      summarise(Mean_Value = mean(.data[[input$explorer_metric]], na.rm = TRUE), .groups = "drop")
+    # Dynamically get the name of the selected metric and its corresponding SD column
+    metric_col <- sym(input$explorer_metric)
+    sd_col <- sym(paste0(input$explorer_metric, "_sd"))
+    group_col <- sym(input$explorer_color_by)
     
-    overall_mean <- df %>%
-      group_by(Year) %>%
-      summarise(Mean_Value = mean(.data[[input$explorer_metric]], na.rm = TRUE), .groups = "drop")
+    # Aggregate the data based on the user's chosen grouping variable
+    plot_data <- df %>%
+      group_by(Year, !!group_col) %>%
+      summarise(
+        Mean_Value = mean(.data[[metric_col]], na.rm = TRUE),
+        # Aggregate variance, then convert back to SD for the ribbon
+        Agg_SD = sqrt(mean(.data[[sd_col]]^2, na.rm = TRUE)),
+        .groups = "drop"
+      ) %>%
+      mutate(
+        Lower_CI = Mean_Value - 1.96 * Agg_SD,
+        Upper_CI = Mean_Value + 1.96 * Agg_SD
+      )
     
-    ggplot(zone_means, aes(x = Year, y = Mean_Value, color = GeomorphicZone)) +
+    ggplot(plot_data, aes(x = Year, y = Mean_Value, color = !!group_col, fill = !!group_col)) +
+      geom_ribbon(aes(ymin = Lower_CI, ymax = Upper_CI), alpha = 0.2, linetype = 0) +
       geom_line(linewidth = 1.2) +
-      geom_line(data = overall_mean, aes(x = Year, y = Mean_Value), color = "grey40", linetype = "dashed", linewidth = 1, inherit.aes = FALSE) +
-      labs(y = gsub("_", " ", input$explorer_metric), x = "Year", color = "Geomorphic Zone") +
+      labs(
+        y = gsub("_", " ", input$explorer_metric),
+        x = "Year",
+        color = gsub("_", " ", input$explorer_color_by),
+        fill = gsub("_", " ", input$explorer_color_by)
+      ) +
       theme_minimal(base_size = 14) +
       theme(legend.position = "bottom")
   })
