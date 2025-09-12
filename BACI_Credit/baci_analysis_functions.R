@@ -4,8 +4,8 @@ library(dplyr)
 library(tibble)
 library(tidyr)
 library(rstanarm)
+library(INLA)
 
-# Define the properties of the 6 core metrics for the simulation
 METRIC_DEFINITIONS <- tribble(
   ~Metric,                ~Mean_Baseline, ~Temporal_SD,
   "Coral Cover",          0.30,           0.04,
@@ -17,9 +17,9 @@ METRIC_DEFINITIONS <- tribble(
 )
 
 run_baci_analysis <- function(
-    n_sites_ctrl, n_transects, n_years, intervention_year, true_uplift_pct,
-    shock_type, shock_year, shock_magnitude_pct, survey_precision_sd,
-    spatial_patchiness_sd
+    analysis_method, n_sites_ctrl, n_transects, n_years, intervention_year, 
+    true_uplift_pct, shock_type, shock_year, shock_magnitude_pct, 
+    survey_precision_sd, spatial_patchiness_sd, temporal_variation_sd
 ) {
   
   uplift_rate <- true_uplift_pct / 100
@@ -28,14 +28,13 @@ run_baci_analysis <- function(
   site_ids <- paste("Site", 1:n_sites_total)
   site_types <- c("Treatment", rep("Control", n_sites_ctrl))
   
-  # --- 1. Simulate "True" and "Observed" data for ALL 6 metrics ---
   observed_data <- METRIC_DEFINITIONS %>%
     crossing(Year = 0:n_years, Site_ID = site_ids, Transect_ID = 1:n_transects) %>%
     left_join(tibble(Site_ID = site_ids, Site_Type = site_types), by = "Site_ID") %>%
     group_by(Metric, Site_ID) %>%
     mutate(
       start_cover = rnorm(1, mean = Mean_Baseline, sd = spatial_patchiness_sd),
-      temporal_noise = rnorm(n(), 0, sd = Temporal_SD),
+      temporal_noise = rnorm(n(), 0, sd = temporal_variation_sd),
       uplift_effect = if_else(Site_Type == "Treatment" & Year >= intervention_year, uplift_rate, 0),
       True_Value = start_cover + (0.01 * Year) + cumsum(temporal_noise + uplift_effect),
       True_Value = pmin(0.95, pmax(0.01, True_Value))
@@ -59,69 +58,87 @@ run_baci_analysis <- function(
   observed_data <- observed_data %>%
     mutate(Observed_Value = rnorm(n(), mean = True_Value, sd = survey_precision_sd))
   
-  # --- 2. Calculate the Reef Condition Index (RCI) ---
+  # --- THE FIX: RCI calculation now correctly uses Year 0 as the reference ---
   rci_data <- observed_data %>%
     group_by(Metric, Site_ID) %>%
-    # Normalize each metric by its 'Before' period mean
-    mutate(reference_value = mean(Observed_Value[Year > 0 & Year < intervention_year])) %>%
+    # Calculate the reference value ONLY from Year 0
+    mutate(reference_value = mean(Observed_Value[Year == 0], na.rm = TRUE)) %>%
     ungroup() %>%
+    filter(reference_value > 0) %>% # Avoid division by zero
     mutate(Normalized_Value = Observed_Value / reference_value) %>%
     # Average the normalized values to get the RCI
     group_by(Year, Site_ID, Site_Type, Transect_ID) %>%
     summarise(Observed_Value = mean(Normalized_Value, na.rm = TRUE), .groups = "drop") %>%
     mutate(Metric = "Composite Index")
   
-  # Combine RCI data with the individual metric data
   analysis_input_data <- bind_rows(
     observed_data %>% select(Metric, Year, Site_ID, Site_Type, Observed_Value),
     rci_data %>% select(Metric, Year, Site_ID, Site_Type, Observed_Value)
   )
   
-  # --- 3. Analyze each metric AND the RCI individually ---
   results_by_metric <- analysis_input_data %>%
-    filter(Year > 0) %>%
+    filter(Year > 0) %>% # Analysis of trends starts from Year 1
     group_by(Metric) %>%
     do({
       metric_data <- .
       
       analysis_data <- metric_data %>%
-        filter(Year >= intervention_year) %>%
-        mutate(Time = Year - intervention_year)
+        mutate(
+          Time = Year,
+          # Create a specific variable for the treatment effect post-intervention
+          Uplift_Period = if_else(Site_Type == "Treatment" & Year >= intervention_year, 1, 0)
+        )
       
-      baci_model <- stan_lmer(
-        Observed_Value ~ Time * Site_Type + (Time | Site_ID),
-        data = analysis_data,
-        chains = 2, iter = 1000, refresh = 0, cores = getOption("mc.cores", 2)
-      )
+      # Use a robust model that tests if the slope over Time is steeper during the uplift period
+      # This is the formal statistical test for the BACI interaction
+      model_formula <- Observed_Value ~ Time * Site_Type + Time:Uplift_Period + (Time | Site_ID)
       
-      posterior_draws <- as.data.frame(baci_model)
-      uplift_param <- "Time:Site_TypeTreatment"
+      # Fit model using the selected engine
+      if (analysis_method == "Full Bayesian (Stan)") {
+        model <- stan_lmer(
+          model_formula,
+          data = analysis_data, chains = 2, iter = 1000, refresh = 0, cores = getOption("mc.cores", 2), na.action = na.omit
+        )
+        posterior <- as.data.frame(model)
+        uplift_param <- "Time:Uplift_Period" # This is the parameter of interest
+        
+      } else { # Fast Approximation (INLA)
+        # INLA requires a slightly different formula structure
+        analysis_data$Site_ID_Factor <- as.factor(analysis_data$Site_ID)
+        model <- INLA::inla(
+          Observed_Value ~ Time * Site_Type + Time:Uplift_Period + f(Site_ID_Factor, Time, model = "iid"),
+          data = analysis_data, family = "gaussian",
+          control.compute = list(config = TRUE),
+          control.predictor = list(compute = TRUE)
+        )
+        posterior <- tryCatch(
+          inla.posterior.sample(1000, model),
+          error = function(e) NULL
+        )
+        uplift_param <- "Time:Uplift_Period"
+      }
       
-      if(uplift_param %in% names(posterior_draws)) {
-        uplift_draws <- posterior_draws[[uplift_param]]
-        prob_uplift <- mean(uplift_draws > 0)
-        mean_uplift <- median(uplift_draws)
-        lower_ci <- quantile(uplift_draws, 0.025)
-        upper_ci <- quantile(uplift_draws, 0.975)
+      # Extract results
+      if(uplift_param %in% names(posterior)) {
+        draws <- posterior[[uplift_param]]
+        prob_uplift <- mean(draws > 0)
+        mean_uplift <- median(draws)
+        lower_ci <- quantile(draws, 0.025)
+        upper_ci <- quantile(draws, 0.975)
       } else {
         prob_uplift <- 0; mean_uplift <- 0; lower_ci <- 0; upper_ci <- 0
       }
       
       tibble(
-        Mean_Uplift = mean_uplift,
-        Uplift_CI_Lower = lower_ci,
-        Uplift_CI_Upper = upper_ci,
-        Prob_Real_Uplift = prob_uplift,
+        Mean_Uplift = mean_uplift, Uplift_CI_Lower = lower_ci,
+        Uplift_CI_Upper = upper_ci, Prob_Real_Uplift = prob_uplift,
         Credit_Score = mean_uplift * prob_uplift
       )
     }) %>%
     ungroup()
   
-  # --- 4. Prepare Outputs ---
-  composite_results <- results_by_metric %>%
-    filter(Metric == "Composite Index")
+  composite_results <- results_by_metric %>% filter(Metric == "Composite Index")
   
-  # Prepare plot data (for all metrics and RCI)
   plot_summary <- analysis_input_data %>%
     group_by(Metric, Year, Site_Type) %>%
     summarise(
@@ -136,6 +153,7 @@ run_baci_analysis <- function(
     results_table = results_by_metric,
     composite_uplift = composite_results$Mean_Uplift,
     composite_prob = composite_results$Prob_Real_Uplift,
-    composite_credit = composite_results$Credit_Score
+    composite_credit = composite_results$Credit_Score,
+    raw_data = observed_data %>% select(Metric, Year, Site_ID, Site_Type, Transect_ID, True_Value, Observed_Value)
   ))
-}
+}```
