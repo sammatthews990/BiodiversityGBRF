@@ -1,45 +1,48 @@
 # baci_analysis_functions.R
-#
-# This script contains the core statistical engine for the BACI Power Simulator.
-# It uses a Bayesian hierarchical model (stan_lmer) to estimate uplift and uncertainty.
 
 library(dplyr)
 library(tibble)
 library(tidyr)
 library(rstanarm)
+library(INLA)
+
+METRIC_DEFINITIONS <- tribble(
+  ~Metric,                ~Mean_Baseline, ~Temporal_SD,
+  "Coral Cover",          0.30,           0.04,
+  "Structural Complexity",0.40,           0.05,
+  "Algal Cover",          0.20,           0.06,
+  "Fish Biomass",         0.50,           0.08,
+  "Fish Diversity",       0.60,           0.07,
+  "Invertebrate Density", 0.35,           0.09
+)
 
 run_baci_analysis <- function(
-    n_sites_ctrl, n_transects, n_years, intervention_year, true_uplift_pct,
-    shock_type, shock_year, shock_magnitude_pct, survey_precision_sd,
-    spatial_patchiness_sd, temporal_variation_sd
+    analysis_method, n_sites_ctrl, n_transects, n_years, intervention_year, 
+    true_uplift_pct, shock_type, shock_year, shock_magnitude_pct, 
+    survey_precision_sd, spatial_patchiness_sd, temporal_variation_sd
 ) {
   
-  # --- 1. Setup Simulation Parameters ---
   uplift_rate <- true_uplift_pct / 100
   shock_loss <- shock_magnitude_pct / 100
   n_sites_total <- 1 + n_sites_ctrl
   site_ids <- paste("Site", 1:n_sites_total)
   site_types <- c("Treatment", rep("Control", n_sites_ctrl))
   
-  # --- 2. Generate "True" Underlying Coral Cover ---
-  true_cover_df <- tibble(Year = 0:n_years) %>%
-    crossing(Site_ID = site_ids) %>%
+  observed_data <- METRIC_DEFINITIONS %>%
+    crossing(Year = 0:n_years, Site_ID = site_ids, Transect_ID = 1:n_transects) %>%
     left_join(tibble(Site_ID = site_ids, Site_Type = site_types), by = "Site_ID") %>%
-    group_by(Site_ID) %>%
-    mutate(start_cover = rnorm(1, mean = 0.3, sd = spatial_patchiness_sd)) %>%
-    ungroup() %>%
-    mutate(temporal_noise = rnorm(n(), 0, sd = temporal_variation_sd)) %>%
-    group_by(Site_ID) %>%
+    group_by(Metric, Site_ID) %>%
     mutate(
+      start_cover = rnorm(1, mean = Mean_Baseline, sd = spatial_patchiness_sd),
+      temporal_noise = rnorm(n(), 0, sd = temporal_variation_sd),
       uplift_effect = if_else(Site_Type == "Treatment" & Year >= intervention_year, uplift_rate, 0),
-      True_Cover = start_cover + (0.01 * Year) + cumsum(temporal_noise + uplift_effect)
+      True_Value = start_cover + (0.01 * Year) + cumsum(temporal_noise + uplift_effect),
+      True_Value = pmin(0.95, pmax(0.01, True_Value))
     ) %>%
-    ungroup() %>%
-    mutate(True_Cover = pmin(0.95, pmax(0.01, True_Cover)))
+    ungroup()
   
-  # --- 3. Apply Exogenous Shock Event ---
   if (shock_type != "No Shock") {
-    true_cover_df <- true_cover_df %>%
+    observed_data <- observed_data %>%
       mutate(
         shock_multiplier = case_when(
           Year < shock_year ~ 1,
@@ -48,71 +51,114 @@ run_baci_analysis <- function(
           Year >= shock_year & shock_type == "Localized Impact (COTS)" & Site_ID %in% sample(site_ids, size = ceiling(n_sites_total/2)) ~ 1 - shock_loss,
           TRUE ~ 1
         ),
-        True_Cover = True_Cover * shock_multiplier
+        True_Value = True_Value * shock_multiplier
       )
   }
   
-  # --- 4. Simulate the Observation Process (Monitoring) ---
-  observed_data <- true_cover_df %>%
-    # We only observe data from Year 1 onwards
-    filter(Year > 0) %>%
-    crossing(Transect_ID = 1:n_transects) %>%
-    mutate(
-      Observed_Cover = rnorm(n(), mean = True_Cover, sd = survey_precision_sd)
-    )
+  observed_data <- observed_data %>%
+    mutate(Observed_Value = rnorm(n(), mean = True_Value, sd = survey_precision_sd))
   
-  # --- 5. Perform the Bayesian BACI Analysis ---
-  # We only use data from after the intervention starts for this model
-  analysis_data <- observed_data %>%
-    filter(Year >= intervention_year) %>%
-    mutate(Time = Year - intervention_year) # Time since intervention
+  rci_data <- observed_data %>%
+    group_by(Metric, Site_ID) %>%
+    mutate(reference_value = mean(Observed_Value[Year == 0], na.rm = TRUE)) %>%
+    ungroup() %>%
+    filter(reference_value > 0.01) %>%
+    mutate(Normalized_Value = Observed_Value / reference_value) %>%
+    group_by(Year, Site_ID, Site_Type, Transect_ID) %>%
+    summarise(Observed_Value = mean(Normalized_Value, na.rm = TRUE), .groups = "drop") %>%
+    mutate(Metric = "Composite Index")
   
-  # Fit the Bayesian model
-  # This model tests if the slope over Time is different for the Treatment site
-  baci_model <- stan_lmer(
-    Observed_Cover ~ Time * Site_Type + (Time | Site_ID),
-    data = analysis_data,
-    chains = 2, iter = 1000, refresh = 0, # Keep simulation fast for Shiny
-    cores = getOption("mc.cores", 2)
+  analysis_input_data <- bind_rows(
+    observed_data %>% select(Metric, Year, Site_ID, Site_Type, Observed_Value),
+    rci_data %>% select(Metric, Year, Site_ID, Site_Type, Observed_Value)
   )
   
-  # Extract the posterior distribution of the model parameters
-  posterior_draws <- as.data.frame(baci_model)
+  results_by_metric <- analysis_input_data %>%
+    filter(Year > 0) %>%
+    group_by(Metric) %>%
+    do({
+      metric_data <- .
+      
+      # --- THE FIX: Use a standard, robust BACI interaction model ---
+      analysis_data <- metric_data %>%
+        mutate(
+          Time = Year,
+          # Create a simple 0/1 indicator for the treatment group
+          Is_Treatment = if_else(Site_Type == "Treatment", 1, 0)
+        )
+      
+      # This formula tests if the slope over Time is different for the Treatment group
+      model_formula <- Observed_Value ~ Time * Is_Treatment + (Time | Site_ID)
+      
+      # The parameter of interest is the interaction term
+      uplift_param <- "Time:Is_Treatment"
+      
+      # Fit model using the selected engine
+      if (analysis_method == "Full Bayesian (Stan)") {
+        model <- stan_lmer(
+          model_formula, data = analysis_data, chains = 2, iter = 1000, 
+          refresh = 0, cores = getOption("mc.cores", 2), na.action = na.omit
+        )
+        posterior <- as.data.frame(model)
+        
+      } else { # Fast Approximation (INLA)
+        # INLA requires a slightly different formula structure
+        analysis_data$Site_ID_Factor <- as.factor(analysis_data$Site_ID)
+        model <- INLA::inla(
+          Observed_Value ~ Time * Is_Treatment + f(Site_ID_Factor, Time, model="iid"),
+          data = analysis_data, family = "gaussian",
+          control.compute = list(config = TRUE), control.predictor = list(compute = TRUE)
+        )
+        # Sample from the posterior to get draws
+        posterior_samples <- INLA::inla.posterior.sample(1000, model)
+        # This is a more complex step to extract the specific parameter
+        draws <- sapply(posterior_samples, function(x) x$latent[uplift_param, 1])
+        posterior <- data.frame(draws)
+        names(posterior) <- uplift_param
+      }
+      
+      # Extract results
+      if(uplift_param %in% names(posterior)) {
+        draws <- posterior[[uplift_param]]
+        prob_uplift <- mean(draws > 0)
+        mean_uplift <- median(draws)
+        lower_ci <- quantile(draws, 0.025)
+        upper_ci <- quantile(draws, 0.975)
+      } else {
+        prob_uplift <- 0; mean_uplift <- 0; lower_ci <- 0; upper_ci <- 0
+      }
+      
+      tibble(
+        Mean_Uplift = mean_uplift, Uplift_CI_Lower = lower_ci,
+        Uplift_CI_Upper = upper_ci, Prob_Real_Uplift = prob_uplift,
+        Credit_Score = mean_uplift * prob_uplift
+      )
+    }) %>%
+    ungroup()
   
-  # The key parameter is the interaction term, which represents the uplift
-  uplift_parameter_name <- "Time:Site_TypeTreatment"
+  composite_results <- results_by_metric %>%
+    summarise(across(where(is.numeric), ~mean(.x, na.rm = TRUE)))
   
-  # Check if the parameter exists (it might not if the model fails)
-  if(uplift_parameter_name %in% names(posterior_draws)) {
-    uplift_draws <- posterior_draws[[uplift_parameter_name]]
-    
-    # The probability of real uplift is the proportion of the posterior > 0
-    prob_real_uplift <- mean(uplift_draws > 0)
-    
-    # The mean uplift is the median of the posterior distribution
-    mean_uplift <- median(uplift_draws)
-    
-  } else {
-    prob_real_uplift <- 0
-    mean_uplift <- 0
-  }
+  final_results_table <- bind_rows(
+    results_by_metric,
+    composite_results %>% mutate(Metric = "Composite Index")
+  )
   
-  # --- 6. Calculate Credit Score and Prepare Outputs ---
-  credit_score <- mean_uplift * prob_real_uplift
-  
-  plot_summary <- observed_data %>%
-    group_by(Year, Site_Type) %>%
+  plot_summary <- analysis_input_data %>%
+    group_by(Metric, Year, Site_Type) %>%
     summarise(
-      Mean = mean(Observed_Cover, na.rm = TRUE),
-      Lower_CI = quantile(Observed_Cover, 0.025, na.rm = TRUE),
-      Upper_CI = quantile(Observed_Cover, 0.975, na.rm = TRUE),
+      Mean = mean(Observed_Value, na.rm = TRUE),
+      Lower_CI = quantile(Observed_Value, 0.025, na.rm = TRUE),
+      Upper_CI = quantile(Observed_Value, 0.975, na.rm = TRUE),
       .groups = "drop"
     )
   
   return(list(
     plot_data = plot_summary,
-    mean_uplift = mean_uplift,
-    prob_real_uplift = prob_real_uplift,
-    credit_score = credit_score
+    results_table = final_results_table,
+    composite_uplift = composite_results$Mean_Uplift,
+    composite_prob = composite_results$Prob_Real_Uplift,
+    composite_credit = composite_results$Credit_Score,
+    raw_data = observed_data %>% select(Metric, Year, Site_ID, Site_Type, Transect_ID, True_Value, Observed_Value)
   ))
-}
+}```
