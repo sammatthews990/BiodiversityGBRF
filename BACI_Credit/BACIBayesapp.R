@@ -111,25 +111,29 @@ ui <- page_navbar(
                  sliderInput("year_selector", "Year Range", min = min(modelled_data$Year), max = max(modelled_data$Year), value = c(min(modelled_data$Year), max(modelled_data$Year)), sep = "")
                )
              ),
-             card(
-               card_header(
-                 class = "d-flex justify-content-between align-items-center",
-                 "Metric Trends",
-                 # --- NEW UI CONTROLS FOR THE PLOT ---
-                 div(class = "d-flex",
-                     selectInput("explorer_metric", NULL, 
-                                 choices = c("Coral Cover" = "Coral_Cover", "Diversity" = "Diversity", "Shelter Volume" = "Shelter_Volume", "RCI" = "RCI"), 
-                                 selected = "Coral_Cover", width = "180px"),
-                     selectInput("explorer_color_by", NULL,
-                                 choices = c("Geomorphic Zone" = "GeomorphicZone", "Reef" = "Reef_Name", "Intervention" = "Intervention", "Deployment Flag" = "Deployment_Site_Flag"),
-                                 selected = "GeomorphicZone", width = "180px")
-                 )
+             
+             layout_columns(
+               col_widths = c(7, 5),
+               card(
+                 card_header(
+                   class = "d-flex justify-content-between align-items-center",
+                   "Metric Trends",
+                   div(class = "d-flex",
+                       selectInput("explorer_metric", NULL, 
+                                   choices = c("Coral Cover" = "Coral_Cover", "Diversity" = "Diversity", "Shelter Volume" = "Shelter_Volume", "RCI" = "RCI"), 
+                                   selected = "Coral_Cover", width = "180px"),
+                       selectInput("explorer_color_by", NULL,
+                                   choices = c("Geomorphic Zone" = "GeomorphicZone", "Reef" = "Reef_Name", "Intervention" = "Intervention", "Deployment Volume" = "Deployment_Volume", "Deployment Flag" = "Deployment_Site_Flag"),
+                                   selected = "GeomorphicZone", width = "180px")
+                   )
+                 ),
+                 plotOutput("timeSeriesPlot", height = "400px")
                ),
-               plotOutput("timeSeriesPlot", height = "400px")
-             ),
-             card(
-               card_header("Detailed Modelled Data"),
-               DTOutput("dataTableExplorer")
+               card(
+                 full_screen = TRUE,
+                 card_header("Detailed Modelled Data"),
+                 DTOutput("dataTableExplorer")
+               )
              )
            )
   ),
@@ -224,38 +228,43 @@ server <- function(input, output, session) {
       )
   })
   
-  # --- UPDATED PLOT LOGIC ---
+  # --- CORRECTED PLOT LOGIC ---
   output$timeSeriesPlot <- renderPlot({
     df <- filtered_model_data()
     validate(need(nrow(df) > 0, "No data available for the current filter settings."))
     
-    # Dynamically get the name of the selected metric and its corresponding SD column
-    metric_col <- sym(input$explorer_metric)
-    sd_col <- sym(paste0(input$explorer_metric, "_sd"))
-    group_col <- sym(input$explorer_color_by)
+    metric_col_name <- input$explorer_metric
+    sd_col_name <- paste0(input$explorer_metric, "_sd")
+    group_col_name <- input$explorer_color_by
     
-    # Aggregate the data based on the user's chosen grouping variable
+    validate(need(sd_col_name %in% names(df), 
+                  paste("SD column for '", gsub("_", " ", metric_col_name), "' not found.")))
+    
+    # THE FIX: Create a new, clean factor variable for grouping just before plotting.
+    # This ensures that even if the column is numeric-like, ggplot treats it as a discrete group.
+    df <- df %>% mutate(Grouping_Var = as.factor(.data[[group_col_name]]))
+    
     plot_data <- df %>%
-      group_by(Year, !!group_col) %>%
+      group_by(Year, Grouping_Var) %>%
       summarise(
-        Mean_Value = mean(.data[[metric_col]], na.rm = TRUE),
-        # Aggregate variance, then convert back to SD for the ribbon
-        Agg_SD = sqrt(mean(.data[[sd_col]]^2, na.rm = TRUE)),
+        Mean_Value = mean(.data[[metric_col_name]], na.rm = TRUE),
+        Agg_SD = sqrt(mean(.data[[sd_col_name]]^2, na.rm = TRUE)),
         .groups = "drop"
       ) %>%
+      filter(!is.na(Agg_SD)) %>% # Remove groups where SD could not be calculated
       mutate(
         Lower_CI = Mean_Value - 1.96 * Agg_SD,
         Upper_CI = Mean_Value + 1.96 * Agg_SD
       )
     
-    ggplot(plot_data, aes(x = Year, y = Mean_Value, color = !!group_col, fill = !!group_col)) +
+    ggplot(plot_data, aes(x = Year, y = Mean_Value, color = Grouping_Var, fill = Grouping_Var)) +
       geom_ribbon(aes(ymin = Lower_CI, ymax = Upper_CI), alpha = 0.2, linetype = 0) +
       geom_line(linewidth = 1.2) +
       labs(
-        y = gsub("_", " ", input$explorer_metric),
+        y = gsub("_", " ", metric_col_name),
         x = "Year",
-        color = gsub("_", " ", input$explorer_color_by),
-        fill = gsub("_", " ", input$explorer_color_by)
+        color = gsub("_", " ", group_col_name),
+        fill = gsub("_", " ", group_col_name)
       ) +
       theme_minimal(base_size = 14) +
       theme(legend.position = "bottom")
@@ -265,7 +274,7 @@ server <- function(input, output, session) {
     DT::datatable(
       filtered_model_data(),
       rownames = FALSE,
-      options = list(pageLength = 5, scrollX = TRUE)
+      options = list(pageLength = 10, scrollX = TRUE)
     )
   })
 }
