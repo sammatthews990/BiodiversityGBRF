@@ -20,6 +20,7 @@ survey_methods_params <- tribble(
   "ReefScan (AI Towed)",     0.035
 )
 
+# --- UI Definition ---
 ui <- page_navbar(
   title = "BACI Credit Simulator",
   theme = bs_theme(version = 5, preset = "shiny"),
@@ -50,21 +51,23 @@ ui <- page_navbar(
                value_box(title = "Probability of Uplift (Composite)", value = textOutput("prob_card"), showcase = bs_icon("patch-check-fill")),
                value_box(title = "Final Credit Score (Composite)", value = textOutput("credit_card"), showcase = bs_icon("award-fill"), theme_color = "success")
              ),
-             layout_columns(
-               col_widths = c(7, 5), # Assigns 7/12ths of the space to the plot and 5/12ths to the table
-               card(
-                 card_header("Simulated Coral Cover Trends"),
-                 plotOutput("simulationPlot", height = "400px")
+             card(
+               card_header(
+                 class = "d-flex justify-content-between align-items-center",
+                 "Simulated Metric Trends",
+                 selectInput("metric_selector", NULL, choices = c("Composite Index", METRIC_DEFINITIONS$Metric), selected = "Composite Index", width = "250px")
                ),
-               card(
-                 card_header("Detailed Results by Metric"),
-                 DTOutput("resultsTable")
-               )
+               plotOutput("simulationPlot", height = "400px")
+             ),
+             card(
+               card_header("Detailed Results by Metric"),
+               DTOutput("resultsTable")
              )
            )
   )
 )
 
+# --- Server Definition ---
 server <- function(input, output, session) {
   
   observeEvent(input$sim_nyears, {
@@ -89,8 +92,7 @@ server <- function(input, output, session) {
       shock_year = input$sim_shock_year,
       shock_magnitude_pct = input$sim_shock_magnitude,
       survey_precision_sd = sd_precision,
-      spatial_patchiness_sd = 0.03,
-      temporal_variation_sd = 0.04
+      spatial_patchiness_sd = 0.03
     )
   })
   
@@ -110,18 +112,24 @@ server <- function(input, output, session) {
   })
   
   output$simulationPlot <- renderPlot({
-    plot_data <- analysis_results()$plot_data
+    req(input$metric_selector)
+    plot_data <- analysis_results()$plot_data %>%
+      filter(Metric == input$metric_selector)
+    
+    y_label <- if (input$metric_selector == "Composite Index") "Reef Condition Index (Normalized)" else input$metric_selector
+    y_limits <- if (input$metric_selector == "Composite Index") c(0.5, 1.5) else c(0, 1)
+    y_formatter <- if (input$metric_selector == "Composite Index") scales::number_format(accuracy = 0.1) else scales::percent
     
     p <- ggplot(plot_data, aes(x = Year, y = Mean, color = Site_Type, fill = Site_Type)) +
       geom_vline(xintercept = input$sim_intervention_year, linetype = "dashed", color = "blue", linewidth = 1) +
       geom_ribbon(aes(ymin = Lower_CI, ymax = Upper_CI), alpha = 0.2, linetype = 0) +
       geom_line(linewidth = 1.2) +
-      annotate("text", x = input$sim_intervention_year, y = 1, label = "Intervention", color = "blue", hjust = -0.1) +
-      scale_y_continuous(limits = c(0, 1), labels = scales::percent, name = "Coral Cover") +
+      annotate("text", x = input$sim_intervention_year, y = y_limits[2], label = "Intervention", color = "blue", hjust = -0.1, vjust = 1) +
+      scale_y_continuous(limits = y_limits, labels = y_formatter, name = y_label) +
       scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "gray40")) +
       scale_fill_manual(values = c("Treatment" = "darkorange", "Control" = "gray40")) +
       labs(
-        title = "Simulated Monitoring Program Under a Disturbance Scenario",
+        title = paste("Simulated Trend for:", input$metric_selector),
         subtitle = paste("Design:", input$sim_nctrl, "Control Sites,", input$sim_ntran, "Transects/Site,", "using", input$sim_method),
         color = "Site Type", fill = "Site Type"
       ) +
@@ -131,7 +139,7 @@ server <- function(input, output, session) {
     if (input$sim_shock_type != "No Shock") {
       p <- p + 
         geom_vline(xintercept = input$sim_shock_year, linetype = "dashed", color = "red", linewidth = 1) +
-        annotate("text", x = input$sim_shock_year, y = 0.95, label = "Shock Event", color = "red", hjust = -0.1)
+        annotate("text", x = input$sim_shock_year, y = y_limits[2] * 0.95, label = "Shock Event", color = "red", hjust = -0.1, vjust = 1)
     }
     
     p
@@ -143,8 +151,8 @@ server <- function(input, output, session) {
     results_data <- results_data %>%
       mutate(
         Uplift_CI = paste0(
-          scales::percent(Uplift_CI_Lower, 0.1), " to ", 
-          scales::percent(Uplift_CI_Upper, 0.1)
+          round(Uplift_CI_Lower * 100, 1), "% to ", 
+          round(Uplift_CI_Upper * 100, 1), "%"
         )
       ) %>%
       select(Metric, Mean_Uplift, Uplift_CI, Prob_Real_Uplift, Credit_Score)
