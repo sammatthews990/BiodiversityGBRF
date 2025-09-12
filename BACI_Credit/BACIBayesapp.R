@@ -7,12 +7,11 @@ library(tibble)
 library(bslib)
 library(scales)
 library(bsicons)
-library(rstanarm) # Needed for the Bayesian model
+library(rstanarm)
+library(DT)
 
-# Source the external file containing our statistical engine
 source("baci_analysis_functions.R")
 
-# This config data must be defined BEFORE the UI
 survey_methods_params <- tribble(
   ~Method,                   ~SD_Precision,
   "Benthic Photo Transects", 0.045,
@@ -21,7 +20,6 @@ survey_methods_params <- tribble(
   "ReefScan (AI Towed)",     0.035
 )
 
-# --- UI Definition ---
 ui <- page_navbar(
   title = "BACI Credit Simulator",
   theme = bs_theme(version = 5, preset = "shiny"),
@@ -48,23 +46,27 @@ ui <- page_navbar(
              
              layout_columns(
                col_widths = c(4, 4, 4),
-               value_box(title = "Mean Annual Uplift", value = textOutput("uplift_card"), showcase = bs_icon("graph-up-arrow")),
-               value_box(title = "Probability of Real Uplift", value = textOutput("prob_card"), showcase = bs_icon("patch-check-fill")),
-               value_box(title = "Final Credit Score", value = textOutput("credit_card"), showcase = bs_icon("award-fill"), theme_color = "success")
+               value_box(title = "Mean Annual Uplift (Composite)", value = textOutput("uplift_card"), showcase = bs_icon("graph-up-arrow")),
+               value_box(title = "Probability of Uplift (Composite)", value = textOutput("prob_card"), showcase = bs_icon("patch-check-fill")),
+               value_box(title = "Final Credit Score (Composite)", value = textOutput("credit_card"), showcase = bs_icon("award-fill"), theme_color = "success")
              ),
-             card(
-               card_header("Simulated Coral Cover Trends"),
-               plotOutput("simulationPlot", height = "500px")
+             layout_columns(
+               col_widths = c(7, 5), # Assigns 7/12ths of the space to the plot and 5/12ths to the table
+               card(
+                 card_header("Simulated Coral Cover Trends"),
+                 plotOutput("simulationPlot", height = "400px")
+               ),
+               card(
+                 card_header("Detailed Results by Metric"),
+                 DTOutput("resultsTable")
+               )
              )
            )
   )
 )
 
-
-# --- Server Definition ---
 server <- function(input, output, session) {
   
-  # Observer to dynamically update sliders
   observeEvent(input$sim_nyears, {
     nyears <- input$sim_nyears
     updateSliderInput(session, "sim_intervention_year", max = nyears, value = min(input$sim_intervention_year, nyears))
@@ -72,8 +74,7 @@ server <- function(input, output, session) {
   })
   
   analysis_results <- eventReactive(input$run_sim, {
-    
-    showNotification("Running Bayesian simulation... this may take a moment.", type = "message")
+    showNotification("Running Bayesian simulation for all metrics... this may take a moment.", type = "message", duration = 10)
     
     method_params <- survey_methods_params %>% filter(Method == input$sim_method)
     sd_precision <- method_params$SD_Precision
@@ -93,21 +94,19 @@ server <- function(input, output, session) {
     )
   })
   
-  # --- Render Outputs ---
   output$uplift_card <- renderText({
     req(analysis_results())
-    paste0(round(analysis_results()$mean_uplift * 100, 2), "% per year")
+    paste0(round(analysis_results()$composite_uplift * 100, 2), "%")
   })
   
   output$prob_card <- renderText({
     req(analysis_results())
-    scales::percent(analysis_results()$prob_real_uplift, accuracy = 0.1)
+    scales::percent(analysis_results()$composite_prob, accuracy = 0.1)
   })
   
   output$credit_card <- renderText({
     req(analysis_results())
-    # Note: Credit score is now annual uplift * probability
-    round(analysis_results()$credit_score * 100, 1)
+    round(analysis_results()$composite_credit * 100, 1)
   })
   
   output$simulationPlot <- renderPlot({
@@ -138,6 +137,27 @@ server <- function(input, output, session) {
     p
   })
   
+  output$resultsTable <- renderDT({
+    results_data <- analysis_results()$results_table
+    
+    results_data <- results_data %>%
+      mutate(
+        Uplift_CI = paste0(
+          scales::percent(Uplift_CI_Lower, 0.1), " to ", 
+          scales::percent(Uplift_CI_Upper, 0.1)
+        )
+      ) %>%
+      select(Metric, Mean_Uplift, Uplift_CI, Prob_Real_Uplift, Credit_Score)
+    
+    DT::datatable(
+      results_data,
+      rownames = FALSE,
+      colnames = c("Metric", "Mean Annual Uplift", "95% CI of Uplift", "Probability of Uplift", "Credit Score"),
+      options = list(dom = 't', pageLength = 10, scrollX = TRUE)
+    ) %>%
+      formatPercentage(c("Mean_Uplift", "Prob_Real_Uplift"), digits = 1) %>%
+      formatRound("Credit_Score", digits = 2)
+  })
 }
 
 shinyApp(ui, server)
