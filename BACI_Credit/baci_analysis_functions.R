@@ -6,15 +6,18 @@ library(tidyr)
 library(rstanarm)
 library(INLA)
 
-METRIC_DEFINITIONS <- tribble(
-  ~Metric,                ~Mean_Baseline, ~Temporal_SD,
-  "Coral Cover",          0.30,           0.04,
-  "Structural Complexity",0.40,           0.05,
-  "Algal Cover",          0.20,           0.06,
-  "Fish Biomass",         0.50,           0.08,
-  "Fish Diversity",       0.60,           0.07,
-  "Invertebrate Density", 0.35,           0.09
-)
+# This check allows the script to be run standalone for auditing.
+if (!exists("METRIC_DEFINITIONS")) {
+  METRIC_DEFINITIONS <- tribble(
+    ~Metric,                ~Mean_Baseline, ~Temporal_SD,
+    "Coral Cover",          0.30,           0.04,
+    "Structural Complexity",0.40,           0.05,
+    "Algal Cover",          0.20,           0.06,
+    "Fish Biomass",         0.50,           0.08,
+    "Fish Diversity",       0.60,           0.07,
+    "Invertebrate Density", 0.35,           0.09
+  )
+}
 
 run_baci_analysis <- function(
     analysis_method, n_sites_ctrl, n_transects, n_years, intervention_year, 
@@ -28,6 +31,7 @@ run_baci_analysis <- function(
   site_ids <- paste("Site", 1:n_sites_total)
   site_types <- c("Treatment", rep("Control", n_sites_ctrl))
   
+  # --- 1. Simulate "True" and "Observed" data for ALL 6 metrics ---
   observed_data <- METRIC_DEFINITIONS %>%
     crossing(Year = 0:n_years, Site_ID = site_ids, Transect_ID = 1:n_transects) %>%
     left_join(tibble(Site_ID = site_ids, Site_Type = site_types), by = "Site_ID") %>%
@@ -46,9 +50,9 @@ run_baci_analysis <- function(
       mutate(
         shock_multiplier = case_when(
           Year < shock_year ~ 1,
-          Year >= shock_year & shock_type == "Cyclonic Impact (All sites)" ~ 1 - shock_loss,
-          Year >= shock_year & shock_type == "Bleaching Event (Variable impact)" ~ 1 - (shock_loss * runif(n(), 0.7, 1.3)),
-          Year >= shock_year & shock_type == "Localized Impact (COTS)" & Site_ID %in% sample(site_ids, size = ceiling(n_sites_total/2)) ~ 1 - shock_loss,
+          Year >= shock_year & shock_type == "Cyclonic Impact" ~ 1 - shock_loss,
+          Year >= shock_year & shock_type == "Bleaching Event" ~ 1 - (shock_loss * runif(n(), 0.7, 1.3)),
+          Year >= shock_year & shock_type == "Localized Impact" & Site_ID %in% sample(site_ids, size = ceiling(n_sites_total/2)) ~ 1 - shock_loss,
           TRUE ~ 1
         ),
         True_Value = True_Value * shock_multiplier
@@ -58,6 +62,7 @@ run_baci_analysis <- function(
   observed_data <- observed_data %>%
     mutate(Observed_Value = rnorm(n(), mean = True_Value, sd = survey_precision_sd))
   
+  # --- 2. Calculate the Reef Condition Index (RCI) ---
   rci_data <- observed_data %>%
     group_by(Metric, Site_ID) %>%
     mutate(reference_value = mean(Observed_Value[Year == 0], na.rm = TRUE)) %>%
@@ -73,76 +78,80 @@ run_baci_analysis <- function(
     rci_data %>% select(Metric, Year, Site_ID, Site_Type, Observed_Value)
   )
   
+  # --- 3. Analyze each metric AND the RCI individually ---
   results_by_metric <- analysis_input_data %>%
     filter(Year > 0) %>%
     group_by(Metric) %>%
     do({
       metric_data <- .
       
-      # --- THE FIX: Use a standard, robust BACI interaction model ---
-      analysis_data <- metric_data %>%
-        mutate(
-          Time = Year,
-          # Create a simple 0/1 indicator for the treatment group
-          Is_Treatment = if_else(Site_Type == "Treatment", 1, 0)
-        )
-      
-      # This formula tests if the slope over Time is different for the Treatment group
-      model_formula <- Observed_Value ~ Time * Is_Treatment + (Time | Site_ID)
-      
-      # The parameter of interest is the interaction term
-      uplift_param <- "Time:Is_Treatment"
-      
-      # Fit model using the selected engine
-      if (analysis_method == "Full Bayesian (Stan)") {
-        model <- stan_lmer(
-          model_formula, data = analysis_data, chains = 2, iter = 1000, 
-          refresh = 0, cores = getOption("mc.cores", 2), na.action = na.omit
-        )
-        posterior <- as.data.frame(model)
+      # Use robust error handling in case a model fails on a messy dataset
+      analysis_output <- tryCatch({
         
-      } else { # Fast Approximation (INLA)
-        # INLA requires a slightly different formula structure
-        analysis_data$Site_ID_Factor <- as.factor(analysis_data$Site_ID)
-        model <- INLA::inla(
-          Observed_Value ~ Time * Is_Treatment + f(Site_ID_Factor, Time, model="iid"),
-          data = analysis_data, family = "gaussian",
-          control.compute = list(config = TRUE), control.predictor = list(compute = TRUE)
+        analysis_data <- metric_data %>%
+          mutate(
+            Time = Year,
+            Is_Treatment = if_else(Site_Type == "Treatment", 1, 0)
+          )
+        
+        model_formula <- Observed_Value ~ Time * Is_Treatment + (Time | Site_ID)
+        uplift_param <- "Time:Is_Treatment"
+        
+        if (analysis_method == "Full Bayesian (Stan)") {
+          model <- stan_lmer(
+            model_formula, data = analysis_data, chains = 2, iter = 1000, 
+            refresh = 0, cores = getOption("mc.cores", 2), na.action = na.omit
+          )
+          posterior <- as.data.frame(model)
+          
+        } else { # Fast Approximation (INLA)
+          analysis_data$Site_ID_Factor <- as.factor(analysis_data$Site_ID)
+          model <- INLA::inla(
+            Observed_Value ~ Time * Is_Treatment + f(Site_ID_Factor, Time, model="iid"),
+            data = analysis_data, family = "gaussian",
+            control.compute = list(config = TRUE), control.predictor = list(compute = TRUE)
+          )
+          marginal <- model$marginals.fixed[[uplift_param]]
+          
+          posterior <- data.frame()
+          if(!is.null(marginal)){
+            draws <- INLA::inla.rmarginal(1000, marginal)
+            posterior <- data.frame(draws)
+            names(posterior) <- uplift_param
+          }
+        }
+        
+        if(uplift_param %in% names(posterior)) {
+          draws <- posterior[[uplift_param]]
+          prob_uplift <- mean(draws > 0)
+          mean_uplift <- median(draws)
+          lower_ci <- quantile(draws, 0.025)
+          upper_ci <- quantile(draws, 0.975)
+        } else {
+          prob_uplift <- 0; mean_uplift <- 0; lower_ci <- 0; upper_ci <- 0
+        }
+        
+        tibble(
+          Mean_Uplift = mean_uplift, Uplift_CI_Lower = lower_ci,
+          Uplift_CI_Upper = upper_ci, Prob_Real_Uplift = prob_uplift,
+          Credit_Score = mean_uplift * prob_uplift
         )
-        # Sample from the posterior to get draws
-        posterior_samples <- INLA::inla.posterior.sample(1000, model)
-        # This is a more complex step to extract the specific parameter
-        draws <- sapply(posterior_samples, function(x) x$latent[uplift_param, 1])
-        posterior <- data.frame(draws)
-        names(posterior) <- uplift_param
-      }
+        
+      }, error = function(e) {
+        # If any error occurs, return an un-powered result instead of crashing
+        tibble(
+          Mean_Uplift = NA, Uplift_CI_Lower = NA, Uplift_CI_Upper = NA, 
+          Prob_Real_Uplift = NA, Credit_Score = NA
+        )
+      })
       
-      # Extract results
-      if(uplift_param %in% names(posterior)) {
-        draws <- posterior[[uplift_param]]
-        prob_uplift <- mean(draws > 0)
-        mean_uplift <- median(draws)
-        lower_ci <- quantile(draws, 0.025)
-        upper_ci <- quantile(draws, 0.975)
-      } else {
-        prob_uplift <- 0; mean_uplift <- 0; lower_ci <- 0; upper_ci <- 0
-      }
-      
-      tibble(
-        Mean_Uplift = mean_uplift, Uplift_CI_Lower = lower_ci,
-        Uplift_CI_Upper = upper_ci, Prob_Real_Uplift = prob_uplift,
-        Credit_Score = mean_uplift * prob_uplift
-      )
+      analysis_output
     }) %>%
     ungroup()
   
+  # --- 4. Prepare Final Outputs ---
   composite_results <- results_by_metric %>%
-    summarise(across(where(is.numeric), ~mean(.x, na.rm = TRUE)))
-  
-  final_results_table <- bind_rows(
-    results_by_metric,
-    composite_results %>% mutate(Metric = "Composite Index")
-  )
+    filter(Metric == "Composite Index")
   
   plot_summary <- analysis_input_data %>%
     group_by(Metric, Year, Site_Type) %>%
@@ -155,7 +164,7 @@ run_baci_analysis <- function(
   
   return(list(
     plot_data = plot_summary,
-    results_table = final_results_table,
+    results_table = results_by_metric,
     composite_uplift = composite_results$Mean_Uplift,
     composite_prob = composite_results$Prob_Real_Uplift,
     composite_credit = composite_results$Credit_Score,

@@ -13,12 +13,24 @@ library(INLA)
 
 source("baci_analysis_functions.R")
 
+# Configuration for survey methods
 survey_methods_params <- tribble(
   ~Method,                   ~SD_Precision,
   "Benthic Photo Transects", 0.045,
   "RHIS (Rapid Survey)",     0.120,
   "Detailed Orthomosaic",    0.020,
   "ReefScan (AI Towed)",     0.035
+)
+
+# This must be defined globally for the UI selector
+METRIC_DEFINITIONS <- tribble(
+  ~Metric,                ~Mean_Baseline, ~Temporal_SD,
+  "Coral Cover",          0.30,           0.04,
+  "Structural Complexity",0.40,           0.05,
+  "Algal Cover",          0.20,           0.06,
+  "Fish Biomass",         0.50,           0.08,
+  "Fish Diversity",       0.60,           0.07,
+  "Invertebrate Density", 0.35,           0.09
 )
 
 ui <- page_navbar(
@@ -39,16 +51,13 @@ ui <- page_navbar(
                numericInput("sim_uplift_pct", "True Annual Uplift Post-Intervention (%)", value = 5, min = 0, max = 20, step = 1),
                tags$hr(),
                selectInput("sim_shock_type", "Exogenous Shock Scenario",
-                           choices = c("No Shock", "Cyclonic Impact (All sites)", "Bleaching Event (Variable impact)", "Localized Impact (COTS)")),
+                           choices = c("No Shock", "Cyclonic Impact", "Bleaching Event", "Localized Impact")),
                sliderInput("sim_shock_year", "Shock Event Year", min = 1, max = 20, value = 7, step = 1),
-               sliderInput("sim_shock_magnitude", "Shock Magnitude (% Coral Loss)", min = 0, max = 100, value = 50, step = 5),
+               sliderInput("sim_shock_magnitude", "Shock Magnitude (% Loss)", min = 0, max = 100, value = 50, step = 5),
                tags$hr(),
-               
-               # --- THE FIX: Restored the missing numeric inputs for variability ---
                numericInput("sim_sd_spatial", "Spatial Patchiness (SD)", value = 0.03, min = 0.01, max = 0.2, step = 0.01),
                numericInput("sim_sd_temporal", "Residual Temporal SD", value = 0.04, min = 0.01, max = 0.2, step = 0.01),
                tags$hr(),
-               
                radioButtons("analysis_method", "Analysis Method", 
                             choices = c("Full Bayesian (Stan)", "Fast Approximation (INLA)"), 
                             selected = "Fast Approximation (INLA)"),
@@ -99,11 +108,7 @@ server <- function(input, output, session) {
   })
   
   analysis_results <- eventReactive(input$run_sim, {
-    msg <- if(input$analysis_method == "Full Bayesian (Stan)") {
-      "Running full Bayesian simulation... this will be slow."
-    } else {
-      "Running fast approximation..."
-    }
+    msg <- if(input$analysis_method == "Full Bayesian (Stan)") "Running full Bayesian simulation... this will be slow." else "Running fast approximation..."
     showNotification(msg, type = "message", duration = 10)
     
     method_params <- survey_methods_params %>% filter(Method == input$sim_method)
@@ -120,27 +125,14 @@ server <- function(input, output, session) {
       shock_year = input$sim_shock_year,
       shock_magnitude_pct = input$sim_shock_magnitude,
       survey_precision_sd = sd_precision,
-      # The call is now correctly supplied with values from the restored UI inputs
       spatial_patchiness_sd = input$sim_sd_spatial,
       temporal_variation_sd = input$sim_sd_temporal
     )
   })
   
-  # --- Outputs for Tab 1 ---
-  output$uplift_card <- renderText({
-    req(analysis_results())
-    paste0(round(analysis_results()$composite_uplift * 100, 2), "%")
-  })
-  
-  output$prob_card <- renderText({
-    req(analysis_results())
-    scales::percent(analysis_results()$composite_prob, accuracy = 0.1)
-  })
-  
-  output$credit_card <- renderText({
-    req(analysis_results())
-    round(analysis_results()$composite_credit * 100, 1)
-  })
+  output$uplift_card <- renderText({ req(analysis_results()); paste0(round(analysis_results()$composite_uplift * 100, 2), "%") })
+  output$prob_card <- renderText({ req(analysis_results()); scales::percent(analysis_results()$composite_prob, accuracy = 0.1) })
+  output$credit_card <- renderText({ req(analysis_results()); round(analysis_results()$composite_credit * 100, 1) })
   
   output$simulationPlot <- renderPlot({
     req(input$metric_selector)
@@ -156,17 +148,10 @@ server <- function(input, output, session) {
       geom_ribbon(aes(ymin = Lower_CI, ymax = Upper_CI), alpha = 0.2, linetype = 0) +
       geom_line(linewidth = 1.2) +
       annotate("text", x = input$sim_intervention_year, y = y_limits[2], label = "Intervention", color = "blue", hjust = -0.1, vjust = 1) +
-      coord_cartesian(ylim = y_limits, expand = FALSE) +
-      scale_y_continuous(labels = y_formatter, name = y_label) +
-      scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "gray40")) +
-      scale_fill_manual(values = c("Treatment" = "darkorange", "Control" = "gray40")) +
-      labs(
-        title = paste("Simulated Trend for:", input$metric_selector),
-        subtitle = paste("Design:", input$sim_nctrl, "Control Sites,", input$sim_ntran, "Transects/Site,", "using", input$sim_method),
-        color = "Site Type", fill = "Site Type"
-      ) +
-      theme_minimal(base_size = 14) +
-      theme(legend.position = "bottom")
+      coord_cartesian(ylim = y_limits, expand = FALSE) + scale_y_continuous(labels = y_formatter, name = y_label) +
+      scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "gray40")) + scale_fill_manual(values = c("Treatment" = "darkorange", "Control" = "gray40")) +
+      labs(title = paste("Simulated Trend for:", input$metric_selector), subtitle = paste("Design:", input$sim_nctrl, "Control Sites,", input$sim_ntran, "Transects/Site,", "using", input$sim_method), color = "Site Type", fill = "Site Type") +
+      theme_minimal(base_size = 14) + theme(legend.position = "bottom")
     
     if (input$sim_shock_type != "No Shock") {
       p <- p + 
@@ -194,7 +179,6 @@ server <- function(input, output, session) {
       formatRound("Credit_Score", digits = 2)
   })
   
-  # --- Output for Tab 2 ---
   output$simulatedDataTable <- renderDT({
     req(analysis_results())
     raw_data <- analysis_results()$raw_data
