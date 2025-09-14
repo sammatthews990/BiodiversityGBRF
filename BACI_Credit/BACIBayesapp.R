@@ -15,7 +15,7 @@ library(readr)
 
 source("baci_analysis_functions.R")
 
-# --- Configuration for BACI Simulator ---
+# --- Configuration for BACI Simulator & Power Analysis ---
 survey_methods_params <- tribble(
   ~Method,                   ~SD_Precision,
   "Benthic Photo Transects", 0.045,
@@ -33,32 +33,76 @@ METRIC_DEFINITIONS <- tribble(
 # --- Data Loading for Model Explorer ---
 modelled_data <- readr::read_csv("simdata_ADRIA.csv") %>%
   rename(
-    Year = Year,
-    Reef_Name = Reef,
-    GeomorphicZone = `Geomorphic zone`,
-    Intervention = Intervention,
-    Deployment_Volume = `Deployment Volume`,
-    Coral_Cover = `Coral Cover`,
-    Coral_Cover_sd = `Coral Cover sd`,
-    Diversity = Diversity,
-    Diversity_sd = `Diversity sd`,
-    Shelter_Volume = `Shelter Volume`,
-    Shelter_Volume_sd = `Shelter Volume sd`,
-    RCI = RCI,
-    RCI_sd = `RCI sd`,
+    Year = Year, Reef_Name = Reef, GeomorphicZone = `Geomorphic zone`,
+    Intervention = Intervention, Deployment_Volume = `Deployment Volume`,
+    Coral_Cover = `Coral Cover`, Coral_Cover_sd = `Coral Cover sd`,
+    Diversity = Diversity, Diversity_sd = `Diversity sd`,
+    Shelter_Volume = `Shelter Volume`, Shelter_Volume_sd = `Shelter Volume sd`,
+    RCI = RCI, RCI_sd = `RCI sd`,
     Deployment_Site_Flag = `deployment site flag`,
-    site_lat = `site lat`,
-    site_long = `site long`
+    site_lat = `site lat`, site_long = `site long`
   ) %>%
-  # Ensure grouping variables are treated as factors for plotting
-  mutate(across(c(Reef_Name, GeomorphicZone, Intervention, Deployment_Site_Flag), as.factor))
-
+  mutate(across(c(Reef_Name, GeomorphicZone, Intervention, Deployment_Site_Flag, Deployment_Volume), as.factor))
 
 ui <- page_navbar(
   title = "Coral Reef Analysis Dashboard",
   theme = bs_theme(version = 5, preset = "shiny"),
   
-  # --- TAB 1: BACI Credit Simulator ---
+  # --- TAB 1: Model Scenario Explorer ---
+  tabPanel("Model Scenario Explorer",
+           page_sidebar(
+             sidebar = sidebar(
+               width = "350px",
+               card(card_header("Map Selection"), leafletOutput("reefMap", height = 250)),
+               card(
+                 card_header("Filtering Controls"),
+                 selectInput("reef_selector", "Reef Name", choices = levels(modelled_data$Reef_Name), multiple = TRUE, selected = levels(modelled_data$Reef_Name)[1]),
+                 checkboxGroupInput("geomorph_selector", "Geomorphic Zone", choices = levels(modelled_data$GeomorphicZone), selected = levels(modelled_data$GeomorphicZone)),
+                 sliderInput("year_selector", "Year Range", min = min(modelled_data$Year), max = max(modelled_data$Year), value = c(min(modelled_data$Year), max(modelled_data$Year)), sep = ""),
+                 selectInput("explorer_metric", "Metric to Plot", choices = c("Coral Cover" = "Coral_Cover", "Diversity" = "Diversity", "Shelter Volume" = "Shelter_Volume", "RCI" = "RCI"), selected = "Coral_Cover"),
+                 selectInput("explorer_color_by", "Group/Color By", choices = c("Geomorphic Zone" = "GeomorphicZone", "Reef" = "Reef_Name", "Intervention" = "Intervention", "Deployment Volume" = "Deployment_Volume", "Deployment Flag" = "Deployment_Site_Flag"), selected = "GeomorphicZone")
+               )
+             ),
+             layout_columns(
+               col_widths = c(7, 5),
+               card(card_header("Metric Trends"), plotOutput("timeSeriesPlot", height = "400px")),
+               card(full_screen = TRUE, card_header("Detailed Modelled Data"), DTOutput("dataTableExplorer"))
+             )
+           )
+  ),
+  
+  # --- TAB 2: Power Analysis ---
+  tabPanel("Power Analysis",
+           page_sidebar(
+             sidebar = sidebar(
+               width = "350px",
+               accordion(
+                 open = "Design",
+                 accordion_panel("Survey Design Parameters", icon = bs_icon("sliders"), value = "Design",
+                                 numericInput("power_uplift_pct", "Annual Uplift to Detect (%)", value = 3, min = 0.5, max = 10, step = 0.5),
+                                 sliderInput("power_nyears", "Monitoring Duration (Years)", min = 3, max = 10, value = 5, step = 1),
+                                 radioButtons("power_frequency", "Monitoring Frequency", choices = c("Annual", "Biennial"), selected = "Annual", inline = TRUE),
+                                 selectInput("power_nctrl_selector", "Number of Control Sites to Plot", choices = 1:10, multiple = TRUE, selected = c(3, 5, 8))
+                 ),
+                 accordion_panel("Variability Assumptions", icon = bs_icon("graph-up-arrow"),
+                                 numericInput("power_sd_spatial", "Spatial Patchiness (SD)", value = 0.03, min = 0.01, max = 0.2, step = 0.01),
+                                 numericInput("power_sd_temporal", "Residual Temporal SD", value = 0.04, min = 0.01, max = 0.2, step = 0.01)
+                 ),
+                 accordion_panel("Survey Method & Analysis", icon = bs_icon("gear"),
+                                 selectInput("power_method_selector", "Survey Method", choices = survey_methods_params$Method, selected = "Benthic Photo Transects"),
+                                 radioButtons("power_analysis_method", "Analysis Method", choices = c("Traditional (Formula-Based)", "Simulation-Based (INLA)"), selected = "Traditional (Formula-Based)"),
+                                 actionButton("run_power_analysis", "Run Power Analysis", class = "btn-primary w-100", icon = icon("play"))
+                 )
+               )
+             ),
+             card(
+               card_header("Power Curves by Number of Control Sites"),
+               plotOutput("powerCurvePlot", height = "600px")
+             )
+           )
+  ),
+  
+  # --- TAB 3: BACI Credit Simulator ---
   tabPanel("BACI Credit Simulator",
            page_sidebar(
              sidebar = sidebar(
@@ -96,111 +140,11 @@ ui <- page_navbar(
                card(card_header("Detailed Results by Metric"), DTOutput("resultsTable"))
              )
            )
-  ),
-  
-  # --- TAB 2: Model Scenario Explorer ---
-  tabPanel("Model Scenario Explorer",
-           page_sidebar(
-             sidebar = sidebar(
-               width = "350px",
-               card(card_header("Map Selection"), leafletOutput("reefMap", height = 250)),
-               card(
-                 card_header("Filtering Controls"),
-                 selectInput("reef_selector", "Reef Name", choices = unique(modelled_data$Reef_Name), multiple = TRUE, selected = unique(modelled_data$Reef_Name)[1]),
-                 checkboxGroupInput("geomorph_selector", "Geomorphic Zone", choices = levels(modelled_data$GeomorphicZone), selected = levels(modelled_data$GeomorphicZone)),
-                 sliderInput("year_selector", "Year Range", min = min(modelled_data$Year), max = max(modelled_data$Year), value = c(min(modelled_data$Year), max(modelled_data$Year)), sep = "")
-               )
-             ),
-             
-             layout_columns(
-               col_widths = c(7, 5),
-               card(
-                 card_header(
-                   class = "d-flex justify-content-between align-items-center",
-                   "Metric Trends",
-                   div(class = "d-flex",
-                       selectInput("explorer_metric", NULL, 
-                                   choices = c("Coral Cover" = "Coral_Cover", "Diversity" = "Diversity", "Shelter Volume" = "Shelter_Volume", "RCI" = "RCI"), 
-                                   selected = "Coral_Cover", width = "180px"),
-                       selectInput("explorer_color_by", NULL,
-                                   choices = c("Geomorphic Zone" = "GeomorphicZone", "Reef" = "Reef_Name", "Intervention" = "Intervention", "Deployment Volume" = "Deployment_Volume", "Deployment Flag" = "Deployment_Site_Flag"),
-                                   selected = "GeomorphicZone", width = "180px")
-                   )
-                 ),
-                 plotOutput("timeSeriesPlot", height = "400px")
-               ),
-               card(
-                 full_screen = TRUE,
-                 card_header("Detailed Modelled Data"),
-                 DTOutput("dataTableExplorer")
-               )
-             )
-           )
-  ),
-
-  
-  # --- TAB 3: Simulated Raw Data ---
-  tabPanel("Simulated Raw Data",
-           card(
-             card_header("Raw Simulated Transect-Level Data"),
-             card_body(
-               p("This table shows the complete raw dataset generated by the simulation. Use the filters to explore the data and diagnose how shock events affect specific sites and years."),
-               DTOutput("simulatedDataTable")
-             )
-           )
   )
 )
 
 server <- function(input, output, session) {
-  
-  # --- SERVER LOGIC FOR TAB 1 & 3 ---
-  observeEvent(input$sim_nyears, {
-    nyears <- input$sim_nyears
-    updateSliderInput(session, "sim_intervention_year", max = nyears, value = min(input$sim_intervention_year, nyears))
-    updateSliderInput(session, "sim_shock_year", max = nyears, value = min(input$sim_shock_year, nyears))
-  })
-  analysis_results <- eventReactive(input$run_sim, {
-    msg <- if(input$analysis_method == "Full Bayesian (Stan)") "Running full Bayesian simulation... this will be slow." else "Running fast approximation..."
-    showNotification(msg, type = "message", duration = 10)
-    method_params <- survey_methods_params %>% filter(Method == input$sim_method)
-    sd_precision <- method_params$SD_Precision
-    run_baci_analysis(analysis_method = input$analysis_method, n_sites_ctrl = input$sim_nctrl, n_transects = input$sim_ntran, n_years = input$sim_nyears, intervention_year = input$sim_intervention_year, true_uplift_pct = input$sim_uplift_pct, shock_type = input$sim_shock_type, shock_year = input$sim_shock_year, shock_magnitude_pct = input$sim_shock_magnitude, survey_precision_sd = sd_precision, spatial_patchiness_sd = input$sim_sd_spatial, temporal_variation_sd = input$sim_sd_temporal)
-  })
-  
-  output$uplift_card <- renderText({ req(analysis_results()); paste0(round(analysis_results()$composite_uplift * 100, 2), "%") })
-  output$prob_card <- renderText({ req(analysis_results()); scales::percent(analysis_results()$composite_prob, accuracy = 0.1) })
-  output$credit_card <- renderText({ req(analysis_results()); round(analysis_results()$composite_credit * 100, 1) })
-  
-  output$simulationPlot <- renderPlot({
-    req(input$metric_selector); plot_data <- analysis_results()$plot_data %>% filter(Metric == input$metric_selector)
-    y_label <- if (input$metric_selector == "Composite Index") "Reef Condition Index (Normalized)" else input$metric_selector
-    y_limits <- if (input$metric_selector == "Composite Index") c(0.5, 1.5) else c(0, 1)
-    y_formatter <- if (input$metric_selector == "Composite Index") scales::number_format(accuracy = 0.1) else scales::percent
-    p <- ggplot(plot_data, aes(x = Year, y = Mean, color = Site_Type, fill = Site_Type)) +
-      geom_vline(xintercept = input$sim_intervention_year, linetype = "dashed", color = "blue", linewidth = 1) +
-      geom_ribbon(aes(ymin = Lower_CI, ymax = Upper_CI), alpha = 0.2, linetype = 0) +
-      geom_line(linewidth = 1.2) +
-      annotate("text", x = input$sim_intervention_year, y = y_limits[2], label = "Intervention", color = "blue", hjust = -0.1, vjust = 1) +
-      coord_cartesian(ylim = y_limits, expand = FALSE) + scale_y_continuous(labels = y_formatter, name = y_label) +
-      scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "gray40")) + scale_fill_manual(values = c("Treatment" = "darkorange", "Control" = "gray40")) +
-      labs(title = paste("Simulated Trend for:", input$metric_selector), subtitle = paste("Design:", input$sim_nctrl, "Control Sites,", input$sim_ntran, "Transects/Site,", "using", input$sim_method), color = "Site Type", fill = "Site Type") +
-      theme_minimal(base_size = 14) + theme(legend.position = "bottom")
-    if (input$sim_shock_type != "No Shock") { p <- p + geom_vline(xintercept = input$sim_shock_year, linetype = "dashed", color = "red", linewidth = 1) + annotate("text", x = input$sim_shock_year, y = y_limits[2] * 0.95, label = "Shock Event", color = "red", hjust = -0.1, vjust = 1) }
-    p
-  })
-  
-  output$resultsTable <- renderDT({
-    results_data <- analysis_results()$results_table
-    results_data <- results_data %>% mutate(Uplift_CI = paste0(round(Uplift_CI_Lower * 100, 1), "% to ", round(Uplift_CI_Upper * 100, 1), "%")) %>% select(Metric, Mean_Uplift, Uplift_CI, Prob_Real_Uplift, Credit_Score)
-    DT::datatable(results_data, rownames = FALSE, colnames = c("Metric", "Mean Annual Uplift", "95% CI of Uplift", "Probability of Uplift", "Credit Score"), options = list(dom = 't', pageLength = 10, scrollX = TRUE)) %>% formatPercentage(c("Mean_Uplift", "Prob_Real_Uplift"), digits = 1) %>% formatRound("Credit_Score", digits = 2)
-  })
-  
-  output$simulatedDataTable <- renderDT({
-    req(analysis_results()); raw_data <- analysis_results()$raw_data
-    DT::datatable(raw_data, filter = 'top', rownames = FALSE, options = list(pageLength = 10, scrollX = TRUE)) %>% formatPercentage(c("True_Value", "Observed_Value"), digits = 1)
-  })
-  
-  # --- SERVER LOGIC FOR TAB 2 ---
+  # --- SERVER LOGIC FOR TAB 1 Explorer ---
   reef_locations <- modelled_data %>% 
     group_by(Reef_Name) %>% 
     summarise(lat = first(site_lat), lng = first(site_long), .groups = "drop")
@@ -270,6 +214,152 @@ server <- function(input, output, session) {
       theme(legend.position = "bottom")
   })
   
+  # --- SERVER LOGIC FOR TAB 2: Power Analysis ---
+  power_analysis_results <- eventReactive(input$run_power_analysis, {
+    
+    # --- Setup common parameters ---
+    annual_trend <- input$power_uplift_pct / 100
+    nyears <- input$power_nyears
+    z_alpha <- qnorm(1 - (1 - 0.95)/2) # 95% CI
+    method_params <- survey_methods_params %>% filter(Method == input$power_method_selector)
+    sd_precision <- method_params$SD_Precision
+    sd_spatial <- req(input$power_sd_spatial)
+    sd_temporal <- req(input$power_sd_temporal)
+    n_ctrl_seq <- as.numeric(req(input$power_nctrl_selector))
+    transect_seq <- 1:20
+    
+    time_points <- if(input$power_frequency == "Annual") seq(0, nyears, by=1) else seq(0, nyears, by=2)
+    sum_sq_t <- sum((time_points - mean(time_points))^2)
+    
+    # --- Run analysis based on selected method ---
+    if (input$power_analysis_method == "Traditional (Formula-Based)") {
+      showNotification("Calculating power using statistical formula...", type = "message")
+      
+      results <- tidyr::crossing(
+        N_Controls = n_ctrl_seq,
+        N_Transects = transect_seq
+      ) %>%
+        mutate(
+          total_transect_sd = sqrt(sd_spatial^2 + sd_precision^2),
+          var_site_year = (total_transect_sd^2 / N_Transects) + sd_temporal^2,
+          se_slope = sqrt( (var_site_year / sum_sq_t) * (1 + 1/N_Controls) ),
+          Power = pnorm( (annual_trend / se_slope) - z_alpha)
+        )
+      
+    } else { # Simulation-Based (INLA)
+      showNotification("Running INLA simulation (100 iterations)... this may take a moment.", type = "message", duration = 15)
+      
+      n_sims <- 100
+      
+      # This is a nested loop inside a reactive, which is complex but necessary here.
+      # It iterates through every design scenario and runs a mini-simulation.
+      scenario_list <- list()
+      for (n_ctrl in n_ctrl_seq) {
+        for (n_tran in transect_seq) {
+          
+          sim_results <- purrr::map_df(1:n_sims, ~{
+            # Generate one random dataset
+            sim_data <- tibble(
+              Time = rep(time_points, times = 1 + n_ctrl),
+              Site_ID = rep(paste0("Site", 1:(1+n_ctrl)), each = length(time_points)),
+              Is_Treatment = if_else(Site_ID == "Site1", 1, 0)
+            ) %>%
+              mutate(
+                true_value = 0.3 + (Time * 0.01) + (Time * Is_Treatment * annual_trend) + rnorm(n(), 0, sd_temporal),
+                observed_value = rnorm(n(), true_value, sd = sd_precision)
+              )
+            
+            # Fit INLA model
+            model <- INLA::inla(observed_value ~ Time * Is_Treatment + f(Site_ID, model="iid"), data = sim_data)
+            
+            # Check for significance (p-value < 0.05 is a common proxy)
+            p_value <- model$summary.fixed["Time:Is_Treatment", "0.5quant"] # This is an approximation
+            detected <- p_value < 0.05 # This is a simplified check for detection
+            
+            tibble(detected = detected)
+          })
+          
+          power_estimate <- mean(sim_results$detected, na.rm = TRUE)
+          scenario_list[[paste(n_ctrl, n_tran)]] <- tibble(N_Controls = n_ctrl, N_Transects = n_tran, Power = power_estimate)
+        }
+      }
+      results <- bind_rows(scenario_list)
+    }
+    
+    return(results)
+  })
+  
+  output$powerCurvePlot <- renderPlot({
+    df <- power_analysis_results()
+    validate(need(nrow(df) > 0, "Click 'Run Power Analysis' to generate results."))
+    
+    df <- df %>% mutate(Control_Sites = factor(paste(N_Controls, "Control Sites")))
+    
+    ggplot(df, aes(x = N_Transects, y = Power)) +
+      geom_line(linewidth = 1.2, color = "dodgerblue") +
+      geom_hline(yintercept = 0.8, linetype = "dashed", color = "gray20") +
+      facet_wrap(~Control_Sites) +
+      scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
+      scale_x_continuous(breaks = scales::pretty_breaks()) +
+      labs(
+        title = paste("Power to Detect a", input$power_uplift_pct, "% Annual Uplift"),
+        subtitle = paste("Using", input$power_method_selector, "with", input$power_analysis_method, "method"),
+        x = "Number of Transects per Site",
+        y = "Statistical Power"
+      ) +
+      theme_minimal(base_size = 14)
+  })
+  
+  
+  # --- SERVER LOGIC FOR BACI Simulation Tab ---
+  observeEvent(input$sim_nyears, {
+    nyears <- input$sim_nyears
+    updateSliderInput(session, "sim_intervention_year", max = nyears, value = min(input$sim_intervention_year, nyears))
+    updateSliderInput(session, "sim_shock_year", max = nyears, value = min(input$sim_shock_year, nyears))
+  })
+  analysis_results <- eventReactive(input$run_sim, {
+    msg <- if(input$analysis_method == "Full Bayesian (Stan)") "Running full Bayesian simulation... this will be slow." else "Running fast approximation..."
+    showNotification(msg, type = "message", duration = 10)
+    method_params <- survey_methods_params %>% filter(Method == input$sim_method)
+    sd_precision <- method_params$SD_Precision
+    run_baci_analysis(analysis_method = input$analysis_method, n_sites_ctrl = input$sim_nctrl, n_transects = input$sim_ntran, n_years = input$sim_nyears, intervention_year = input$sim_intervention_year, true_uplift_pct = input$sim_uplift_pct, shock_type = input$sim_shock_type, shock_year = input$sim_shock_year, shock_magnitude_pct = input$sim_shock_magnitude, survey_precision_sd = sd_precision, spatial_patchiness_sd = input$sim_sd_spatial, temporal_variation_sd = input$sim_sd_temporal)
+  })
+  
+  output$uplift_card <- renderText({ req(analysis_results()); paste0(round(analysis_results()$composite_uplift * 100, 2), "%") })
+  output$prob_card <- renderText({ req(analysis_results()); scales::percent(analysis_results()$composite_prob, accuracy = 0.1) })
+  output$credit_card <- renderText({ req(analysis_results()); round(analysis_results()$composite_credit * 100, 1) })
+  
+  output$simulationPlot <- renderPlot({
+    req(input$metric_selector); plot_data <- analysis_results()$plot_data %>% filter(Metric == input$metric_selector)
+    y_label <- if (input$metric_selector == "Composite Index") "Reef Condition Index (Normalized)" else input$metric_selector
+    y_limits <- if (input$metric_selector == "Composite Index") c(0.5, 1.5) else c(0, 1)
+    y_formatter <- if (input$metric_selector == "Composite Index") scales::number_format(accuracy = 0.1) else scales::percent
+    p <- ggplot(plot_data, aes(x = Year, y = Mean, color = Site_Type, fill = Site_Type)) +
+      geom_vline(xintercept = input$sim_intervention_year, linetype = "dashed", color = "blue", linewidth = 1) +
+      geom_ribbon(aes(ymin = Lower_CI, ymax = Upper_CI), alpha = 0.2, linetype = 0) +
+      geom_line(linewidth = 1.2) +
+      annotate("text", x = input$sim_intervention_year, y = y_limits[2], label = "Intervention", color = "blue", hjust = -0.1, vjust = 1) +
+      coord_cartesian(ylim = y_limits, expand = FALSE) + scale_y_continuous(labels = y_formatter, name = y_label) +
+      scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "gray40")) + scale_fill_manual(values = c("Treatment" = "darkorange", "Control" = "gray40")) +
+      labs(title = paste("Simulated Trend for:", input$metric_selector), subtitle = paste("Design:", input$sim_nctrl, "Control Sites,", input$sim_ntran, "Transects/Site,", "using", input$sim_method), color = "Site Type", fill = "Site Type") +
+      theme_minimal(base_size = 14) + theme(legend.position = "bottom")
+    if (input$sim_shock_type != "No Shock") { p <- p + geom_vline(xintercept = input$sim_shock_year, linetype = "dashed", color = "red", linewidth = 1) + annotate("text", x = input$sim_shock_year, y = y_limits[2] * 0.95, label = "Shock Event", color = "red", hjust = -0.1, vjust = 1) }
+    p
+  })
+  
+  output$resultsTable <- renderDT({
+    results_data <- analysis_results()$results_table
+    results_data <- results_data %>% mutate(Uplift_CI = paste0(round(Uplift_CI_Lower * 100, 1), "% to ", round(Uplift_CI_Upper * 100, 1), "%")) %>% select(Metric, Mean_Uplift, Uplift_CI, Prob_Real_Uplift, Credit_Score)
+    DT::datatable(results_data, rownames = FALSE, colnames = c("Metric", "Mean Annual Uplift", "95% CI of Uplift", "Probability of Uplift", "Credit Score"), options = list(dom = 't', pageLength = 10, scrollX = TRUE)) %>% formatPercentage(c("Mean_Uplift", "Prob_Real_Uplift"), digits = 1) %>% formatRound("Credit_Score", digits = 2)
+  })
+  
+  output$simulatedDataTable <- renderDT({
+    req(analysis_results()); raw_data <- analysis_results()$raw_data
+    DT::datatable(raw_data, filter = 'top', rownames = FALSE, options = list(pageLength = 10, scrollX = TRUE)) %>% formatPercentage(c("True_Value", "Observed_Value"), digits = 1)
+  })
+  
+  
+
   output$dataTableExplorer <- renderDT({
     DT::datatable(
       filtered_model_data(),
