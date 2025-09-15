@@ -16,7 +16,7 @@ library(purrr)
 
 source("baci_analysis_functions.R")
 
-# --- Configuration for BACI Simulator & Power Analysis ---
+# --- Configuration for BACI Simulator & Power Analysis ----
 survey_methods_params <- tribble(
   ~Method,                   ~SD_Precision, ~Cost_per_Transect,
   "Benthic Photo Transects", 0.045,         50,
@@ -31,8 +31,37 @@ METRIC_DEFINITIONS <- tribble(
   "Fish Biomass",         0.50,           0.08
 )
 
-# --- Data Loading for Model Explorer ---
-modelled_data <- readr::read_csv("simdata_ADRIA.csv") %>%
+# --- Data Loading and PRE-PROCESSING for Model Explorer ----
+# This section now includes the crucial UPLIFT CALCULATION.
+modelled_data_raw <- readr::read_csv("simdata_ADRIA.csv")
+
+# Create a separate "counterfactual" dataset
+counterfactual_data <- modelled_data_raw %>%
+  filter(`Deployment Volume` == 0) %>%
+  select(Year, Site, Reef, `Geomorphic zone`, `Coral Cover`, `Coral Cover sd`, Diversity, `Diversity sd`, `Shelter Volume`, `Shelter Volume sd`, RCI, `RCI sd`) %>%
+  rename(
+    CF_Coral_Cover = `Coral Cover`, CF_Coral_Cover_sd = `Coral Cover sd`,
+    CF_Diversity = Diversity, CF_Diversity_sd = `Diversity sd`,
+    CF_Shelter_Volume = `Shelter Volume`, CF_Shelter_Volume_sd = `Shelter Volume sd`,
+    CF_RCI = RCI, CF_RCI_sd = `RCI sd`
+  )
+
+# Join the counterfactual back to the main data and calculate uplift
+modelled_data_with_uplift <- modelled_data_raw %>%
+  left_join(counterfactual_data, by = c("Year", "Site", "Reef", "Geomorphic zone")) %>%
+  mutate(
+    # Calculate uplift for each metric
+    Uplift_Coral_Cover = `Coral Cover` - CF_Coral_Cover,
+    Uplift_Diversity = Diversity - CF_Diversity,
+    Uplift_Shelter_Volume = `Shelter Volume` - CF_Shelter_Volume,
+    Uplift_RCI = RCI - CF_RCI,
+    # Calculate the SD of the uplift using variance propagation
+    Uplift_Coral_Cover_sd = sqrt(`Coral Cover sd`^2 + CF_Coral_Cover_sd^2),
+    Uplift_Diversity_sd = sqrt(`Diversity sd`^2 + CF_Diversity_sd^2),
+    Uplift_Shelter_Volume_sd = sqrt(`Shelter Volume sd`^2 + CF_Shelter_Volume_sd^2),
+    Uplift_RCI_sd = sqrt(`RCI sd`^2 + CF_RCI_sd^2)
+  ) %>%
+  # Rename columns for easier use in the app
   rename(
     Year = Year, Reef_Name = Reef, GeomorphicZone = `Geomorphic zone`,
     Intervention = Intervention, Deployment_Volume = `Deployment Volume`,
@@ -45,34 +74,99 @@ modelled_data <- readr::read_csv("simdata_ADRIA.csv") %>%
   ) %>%
   mutate(across(c(Reef_Name, GeomorphicZone, Intervention, Deployment_Site_Flag, Deployment_Volume), as.factor))
 
+# UI ----
 ui <- page_navbar(
   title = "Biodiversity Credit Dashboard",
   theme = bs_theme(version = 5, preset = "shiny"),
   
-  # --- TAB 1: Model Scenario Explorer ---
+  # -- TAB 1: Model Scenario Explorer -----
+
   tabPanel("Model Scenario Explorer",
            page_sidebar(
              sidebar = sidebar(
-               width = "350px",
+               width = "400px",
                card(card_header("Map Selection"), leafletOutput("reefMap", height = 250)),
-               card(
-                 card_header("Filtering Controls"),
-                 selectInput("reef_selector", "Reef Name", choices = levels(modelled_data$Reef_Name), multiple = TRUE, selected = levels(modelled_data$Reef_Name)[1]),
-                 checkboxGroupInput("geomorph_selector", "Geomorphic Zone", choices = levels(modelled_data$GeomorphicZone), selected = levels(modelled_data$GeomorphicZone)),
-                 sliderInput("year_selector", "Year Range", min = min(modelled_data$Year), max = max(modelled_data$Year), value = c(min(modelled_data$Year), max(modelled_data$Year)), sep = ""),
-                 selectInput("explorer_metric", "Metric to Plot", choices = c("Coral Cover" = "Coral_Cover", "Diversity" = "Diversity", "Shelter Volume" = "Shelter_Volume", "RCI" = "RCI"), selected = "Coral_Cover"),
-                 selectInput("explorer_color_by", "Group/Color By", choices = c("Geomorphic Zone" = "GeomorphicZone", "Reef" = "Reef_Name", "Intervention" = "Intervention", "Deployment Volume" = "Deployment_Volume", "Deployment Flag" = "Deployment_Site_Flag"), selected = "GeomorphicZone")
+               # card(
+               #   card_header("Filtering Controls"),
+               #   selectInput("reef_selector", "Reef Name", choices = levels(modelled_data_with_uplift$Reef_Name), multiple = TRUE, selected = levels(modelled_data_with_uplift$Reef_Name)),
+               #   checkboxGroupInput("geomorph_selector", "Geomorphic Zone", choices = levels(modelled_data_with_uplift$GeomorphicZone), selected = levels(modelled_data_with_uplift$GeomorphicZone)),
+               #   checkboxGroupInput("deploy_selector", "Deployment Site", choices = levels(modelled_data_with_uplift$Deployment_Site_Flag), selected = levels(modelled_data_with_uplift$Deployment_Site_Flag)),
+               #   checkboxGroupInput("interv_selector", "DHW Tolerance", choices = levels(modelled_data_with_uplift$Intervention), selected = levels(modelled_data_with_uplift$Intervention)),
+               #   checkboxGroupInput("volume_selector", "Deployment Volume", choices = levels(modelled_data_with_uplift$Deployment_Volume), selected = levels(modelled_data_with_uplift$Deployment_Volume)),
+               #   sliderInput("year_selector", "Year Range", min = min(modelled_data_with_uplift$Year), max = max(modelled_data_with_uplift$Year), value = c(min(modelled_data_with_uplift$Year), max(modelled_data_with_uplift$Year)), sep = "")
+               # )
+               accordion(
+                 open = "Spatial Filters",
+                 accordion_panel("Spatial Filters", value = "Spatial Filters",
+                                 selectInput("reef_selector", "Reef Name", 
+                                             choices = levels(modelled_data_with_uplift$Reef_Name), 
+                                             multiple = TRUE, selected = levels(modelled_data_with_uplift$Reef_Name)),
+                                 checkboxGroupInput("geomorph_selector", "Geomorphic Zone", 
+                                             choices = levels(modelled_data_with_uplift$GeomorphicZone), 
+                                             selected = levels(modelled_data_with_uplift$GeomorphicZone))
+                 ),
+                 accordion_panel("Intervention Filters",
+                                 checkboxGroupInput("deploy_selector", "Deployment Site", inline = TRUE,
+                                             choices = levels(modelled_data_with_uplift$Deployment_Site_Flag), 
+                                            selected = levels(modelled_data_with_uplift$Deployment_Site_Flag)),
+                                 checkboxGroupInput("interv_selector", "DHW Scenario",inline = TRUE,
+                                             choices = unique(modelled_data_with_uplift$Intervention), 
+                                            selected = unique(modelled_data_with_uplift$Intervention)),
+                                 checkboxGroupInput("volume_selector", "Deployment Volume", inline = TRUE,
+                                             choices = levels(modelled_data_with_uplift$Deployment_Volume), 
+                                              selected = levels(modelled_data_with_uplift$Deployment_Volume))
+                 ),
+                 accordion_panel("Time Filter",
+                                 sliderInput("year_selector", "Year Range", 
+                                             min = min(modelled_data_with_uplift$Year), 
+                                             max = max(modelled_data_with_uplift$Year), 
+                                             value = c(min(modelled_data_with_uplift$Year), max(modelled_data_with_uplift$Year)), 
+                                             sep = "")
+                 )
                )
              ),
+             
              layout_columns(
                col_widths = c(7, 5),
-               card(card_header("Metric Trends"), plotOutput("timeSeriesPlot", height = "400px")),
-               card(full_screen = TRUE, card_header("Detailed Modelled Data"), DTOutput("dataTableExplorer"))
+               card(
+                 card_header(
+                   class = "d-flex justify-content-between align-items-center",
+                   "Metric Trends",
+                   div(class = "d-flex",
+                       selectInput("explorer_metric", NULL, 
+                                   choices = c("Coral Cover" = "Coral_Cover", "Diversity" = "Diversity", "Shelter Volume" = "Shelter_Volume", "RCI" = "RCI"), 
+                                   width = "150px"),
+                       # --- THE FIX: Restored the missing choices ---
+                       selectInput("explorer_color_by", NULL, 
+                                   choices = c("Geomorphic Zone" = "GeomorphicZone", "Reef" = "Reef_Name", "Intervention" = "Intervention", "Deployment Volume" = "Deployment_Volume", "Deployment Flag" = "Deployment_Site_Flag"), 
+                                   selected = "GeomorphicZone", width = "150px"),
+                       radioButtons("plot_display_toggle", NULL, choices = c("Raw Values", "Uplift"), selected = "Raw Values", inline = TRUE)
+                   )
+                 ),
+                 plotOutput("timeSeriesPlot", height = "400px")
+               ),
+               # --- THE FIX: Replaced the single layout with a div containing two stacked layouts ---
+               div(
+                 layout_columns(
+                   col_widths = 6,
+                   value_box(title = "Uplift at Final Year (Deployment)", value = textOutput("final_uplift_card_deploy"), showcase = bs_icon("graph-up-arrow"), height = "150px"),
+                   value_box(title = "Avg. Annual Uplift (Deployment)", value = textOutput("annual_uplift_card_deploy"), showcase = bs_icon("calendar-event"), height = "150px")
+                 ),
+                 layout_columns(
+                   col_widths = 6,
+                   value_box(title = "Uplift at Final Year (Spillover)", value = textOutput("final_uplift_card_spill"), showcase = bs_icon("graph-up"), height = "150px"),
+                   value_box(title = "Avg. Annual Uplift (Spillover)", value = textOutput("annual_uplift_card_spill"), showcase = bs_icon("calendar3-range"), height = "150px")
+                 ),
+                 card(
+                   full_screen = TRUE,
+                   card_header("Detailed Modelled Data"),
+                   DTOutput("dataTableExplorer")
+                 )
+               )
              )
            )
-  ),
-  
-  # --- TAB 2: Power Analysis ---
+),
+  # --- TAB 2: Power Analysis ----
   tabPanel("Power Analysis",
            page_sidebar(
              sidebar = sidebar(
@@ -112,7 +206,7 @@ ui <- page_navbar(
            )
   ),
   
-  # --- TAB 3: BACI Credit Simulator ---
+  # --- TAB 3: BACI Credit Simulator ----
   tabPanel("BACI Credit Simulator",
            page_sidebar(
              sidebar = sidebar(
@@ -154,14 +248,14 @@ ui <- page_navbar(
 )
 
 server <- function(input, output, session) {
-  # --- SERVER LOGIC FOR TAB 1 Explorer ---
-  reef_locations <- modelled_data %>% 
+  # --- SERVER LOGIC FOR TAB 1 ----
+  reef_locations <- modelled_data_with_uplift %>% 
     group_by(Reef_Name) %>% 
     summarise(lat = first(site_lat), lng = first(site_long), .groups = "drop")
   
   output$reefMap <- renderLeaflet({
     leaflet(reef_locations) %>%
-      addProviderTiles(providers$Esri.OceanBasemap) %>%
+      addProviderTiles(providers$Esri.WorldImagery) %>%
       addCircleMarkers(lng = ~lng, lat = ~lat, layerId = ~Reef_Name, label = ~Reef_Name, radius = 8, stroke = FALSE, fillOpacity = 0.8)
   })
   
@@ -173,29 +267,37 @@ server <- function(input, output, session) {
   })
   
   filtered_model_data <- reactive({
-    req(input$reef_selector, input$geomorph_selector, input$year_selector)
-    modelled_data %>%
+    req(input$reef_selector, input$geomorph_selector, input$year_selector, input$deploy_selector, input$interv_selector, input$volume_selector)
+    modelled_data_with_uplift %>%
       filter(
         Reef_Name %in% input$reef_selector,
         GeomorphicZone %in% input$geomorph_selector,
+        Deployment_Site_Flag %in% input$deploy_selector,
+        Intervention %in% input$interv_selector,
+        Deployment_Volume %in% input$volume_selector,
         Year >= input$year_selector[1] & Year <= input$year_selector[2]
       )
   })
   
-  # --- CORRECTED PLOT LOGIC ---
   output$timeSeriesPlot <- renderPlot({
     df <- filtered_model_data()
     validate(need(nrow(df) > 0, "No data available for the current filter settings."))
     
-    metric_col_name <- input$explorer_metric
-    sd_col_name <- paste0(input$explorer_metric, "_sd")
+    # Determine which columns to use based on the toggle
+    if (input$plot_display_toggle == "Uplift") {
+      metric_col_name <- paste0("Uplift_", input$explorer_metric)
+      sd_col_name <- paste0("Uplift_", input$explorer_metric, "_sd")
+      y_lab <- paste("Uplift in", gsub("_", " ", input$explorer_metric))
+    } else {
+      metric_col_name <- input$explorer_metric
+      sd_col_name <- paste0(input$explorer_metric, "_sd")
+      y_lab <- gsub("_", " ", input$explorer_metric)
+    }
+    
     group_col_name <- input$explorer_color_by
     
-    validate(need(sd_col_name %in% names(df), 
-                  paste("SD column for '", gsub("_", " ", metric_col_name), "' not found.")))
+    validate(need(sd_col_name %in% names(df), "SD column for selected metric not found."))
     
-    # THE FIX: Create a new, clean factor variable for grouping just before plotting.
-    # This ensures that even if the column is numeric-like, ggplot treats it as a discrete group.
     df <- df %>% mutate(Grouping_Var = as.factor(.data[[group_col_name]]))
     
     plot_data <- df %>%
@@ -205,7 +307,7 @@ server <- function(input, output, session) {
         Agg_SD = sqrt(mean(.data[[sd_col_name]]^2, na.rm = TRUE)),
         .groups = "drop"
       ) %>%
-      filter(!is.na(Agg_SD)) %>% # Remove groups where SD could not be calculated
+      filter(!is.na(Agg_SD)) %>%
       mutate(
         Lower_CI = Mean_Value - 1.96 * Agg_SD,
         Upper_CI = Mean_Value + 1.96 * Agg_SD
@@ -214,17 +316,74 @@ server <- function(input, output, session) {
     ggplot(plot_data, aes(x = Year, y = Mean_Value, color = Grouping_Var, fill = Grouping_Var)) +
       geom_ribbon(aes(ymin = Lower_CI, ymax = Upper_CI), alpha = 0.2, linetype = 0) +
       geom_line(linewidth = 1.2) +
-      labs(
-        y = gsub("_", " ", metric_col_name),
-        x = "Year",
-        color = gsub("_", " ", group_col_name),
-        fill = gsub("_", " ", group_col_name)
-      ) +
+      {if(input$plot_display_toggle == "Uplift") geom_hline(yintercept = 0, linetype = "dashed")} +
+      labs(y = y_lab, x = "Year", color = gsub("_", " ", group_col_name), fill = gsub("_", " ", group_col_name)) +
       theme_minimal(base_size = 14) +
       theme(legend.position = "bottom")
   })
   
-  # --- SERVER LOGIC FOR TAB 2: Power Analysis ---
+  # --- NEW: Server logic for the summary cards ---
+  card_data <- reactive({
+    df <- filtered_model_data()
+    validate(need(nrow(df) > 0, "No data to calculate summary."))
+    
+    intervention_df <- df %>% filter(!Deployment_Volume == 0)
+    validate(need(nrow(intervention_df) > 0, "No intervention sites in current filter to calculate uplift."))
+    
+    final_year <- max(intervention_df$Year)
+    intervention_start <- min(intervention_df$Year[intervention_df$Deployment_Site_Flag == 1], na.rm = TRUE)
+    
+    uplift_col_name <- paste0("Uplift_", input$explorer_metric)
+    
+    # Calculate summary stats for BOTH deployment and spillover sites
+    summary <- intervention_df %>%
+      filter(Year == final_year, !is.na(.data[[uplift_col_name]])) %>%
+      group_by(Deployment_Site_Flag) %>%
+      summarise(final_uplift = mean(.data[[uplift_col_name]], na.rm = TRUE), .groups = "drop")
+    
+    annual_uplift_calc <- function(final_uplift) {
+      if (!is.infinite(intervention_start)) {
+        final_uplift / (final_year - intervention_start + 1)
+      } else { NA }
+    }
+    
+    # Extract values for each group
+    deploy_data <- summary %>% filter(Deployment_Site_Flag == 1)
+    spill_data <- summary %>% filter(Deployment_Site_Flag == 0)
+    
+    list(
+      deploy_final = if(nrow(deploy_data) > 0) deploy_data$final_uplift else NA,
+      deploy_annual = if(nrow(deploy_data) > 0) annual_uplift_calc(deploy_data$final_uplift) else NA,
+      spill_final = if(nrow(spill_data) > 0) spill_data$final_uplift else NA,
+      spill_annual = if(nrow(spill_data) > 0) annual_uplift_calc(spill_data$final_uplift) else NA
+    )
+  })
+  
+  # --- Render all four cards ---
+  render_card_text <- function(value, suffix = "") {
+    renderText({
+      data <- card_data()
+      req(data)
+      val <- data[[value]]
+      if (is.na(val)) "N/A" else paste0(scales::percent(val, accuracy = 0.1), suffix)
+    })
+  }
+  
+  output$final_uplift_card_deploy <- render_card_text("deploy_final")
+  output$annual_uplift_card_deploy <- render_card_text("deploy_annual", " / year")
+  output$final_uplift_card_spill <- render_card_text("spill_final")
+  output$annual_uplift_card_spill <- render_card_text("spill_annual", " / year")
+  
+  output$dataTableExplorer <- renderDT({
+    DT::datatable(
+      filtered_model_data(),
+      rownames = FALSE,
+      options = list(pageLength = 10, scrollX = TRUE)
+    )
+  })
+
+  
+  # --- SERVER LOGIC FOR TAB 2: Power Analysis ----
   power_analysis_results <- eventReactive(input$run_power_analysis, {
     
     showNotification("Running Monte Carlo simulation (10,000 iterations)... this may take a moment.", type = "message", duration = 10)
