@@ -6,6 +6,12 @@ library(tidyr)
 library(rstanarm)
 library(INLA)
 
+calculate_dynamic_sd <- function(p, anchor_p, anchor_sd) {
+  k <- anchor_sd / sqrt(max(anchor_p * (1 - anchor_p), 1e-9))
+  dynamic_sd <- k * sqrt(p * (1 - p))
+  return(dynamic_sd)
+}
+
 # This check allows the script to be run standalone for auditing.
 if (!exists("METRIC_DEFINITIONS")) {
   METRIC_DEFINITIONS <- tribble(
