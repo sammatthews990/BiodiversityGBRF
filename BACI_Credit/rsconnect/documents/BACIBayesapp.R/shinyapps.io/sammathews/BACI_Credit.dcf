@@ -1,0 +1,12 @@
+name: BACI_Credit
+title: BACI_Credit
+username: sammathews
+account: sammathews
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 15448249
+bundleId:
+url: https://sammathews.shinyapps.io/BACI_Credit/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
