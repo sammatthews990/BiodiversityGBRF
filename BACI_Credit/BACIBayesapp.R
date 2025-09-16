@@ -78,13 +78,53 @@ modelled_data_with_uplift <- modelled_data_raw %>%
 ui <- page_navbar(
   title = "Biodiversity Credit Dashboard",
   theme = bs_theme(version = 5, preset = "shiny"),
+  # --- CSS: responsive value-box typography + icon sizing ---
+
   
+  # --- THE FIX: Replace the old <head> with this new, more robust CSS ---  
+  header = tags$head(
+    tags$style(HTML("
+    .value-box-grid {
+      container-type: inline-size;
+    }
+    /* reduce gap between boxes */
+    .value-box-grid .bslib-layout-gap {
+      gap: 0.5rem !important;
+    }
+    .value-box-grid .bslib-value-box {
+      margin: 0.25rem !important;
+    }
+
+    @container (max-width: 600px) {
+      .bslib-value-box {
+        aspect-ratio: 4 / 3;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+      }
+      .bslib-value-box .value-box-title {
+        font-size: clamp(0.7rem, 6cqi, 1rem);
+        white-space: normal;
+      }
+      .bslib-value-box .value-box-value {
+        font-size: clamp(1.2rem, 12cqi, 2.5rem);
+      }
+      .bslib-value-box .showcase-icon {
+        font-size: clamp(1.5rem, 10cqi, 3rem) !important;
+        top: 0.5rem !important;
+        right: 0.5rem !important;
+      }
+    }
+  "))
+  ),
+
   # -- TAB 1: Model Scenario Explorer -----
 
   tabPanel("Model Scenario Explorer",
            page_sidebar(
              sidebar = sidebar(
-               width = "400px",
+               width = "350px",
+               open = "desktop",
                card(card_header("Map Selection"), leafletOutput("reefMap", height = 250)),
                # card(
                #   card_header("Filtering Controls"),
@@ -135,27 +175,26 @@ ui <- page_navbar(
                    div(class = "d-flex",
                        selectInput("explorer_metric", NULL, 
                                    choices = c("Coral Cover" = "Coral_Cover", "Diversity" = "Diversity", "Shelter Volume" = "Shelter_Volume", "RCI" = "RCI"), 
-                                   width = "150px"),
+                                   width = "120px"),
                        # --- THE FIX: Restored the missing choices ---
                        selectInput("explorer_color_by", NULL, 
                                    choices = c("Geomorphic Zone" = "GeomorphicZone", "Reef" = "Reef_Name", "Intervention" = "Intervention", "Deployment Volume" = "Deployment_Volume", "Deployment Flag" = "Deployment_Site_Flag"), 
-                                   selected = "GeomorphicZone", width = "150px"),
+                                   selected = "GeomorphicZone", width = "120px"),
                        radioButtons("plot_display_toggle", NULL, choices = c("Raw Values", "Uplift"), selected = "Raw Values", inline = TRUE)
                    )
                  ),
                  plotOutput("timeSeriesPlot", height = "400px")
                ),
-               # --- THE FIX: Replaced the single layout with a div containing two stacked layouts ---
                div(
                  layout_columns(
                    col_widths = 6,
-                   value_box(title = "Uplift at Final Year (Deployment)", value = textOutput("final_uplift_card_deploy"), showcase = bs_icon("graph-up-arrow"), height = "150px"),
-                   value_box(title = "Avg. Annual Uplift (Deployment)", value = textOutput("annual_uplift_card_deploy"), showcase = bs_icon("calendar-event"), height = "150px")
+                   value_box(title = "Uplift at Final Year (Deployment)", value = textOutput("final_uplift_card_deploy"), showcase = bs_icon("graph-up-arrow", size = "100%"), height = "120px"),
+                   value_box(title = "Avg. Annual Uplift (Deployment)", value = textOutput("annual_uplift_card_deploy"), showcase = bs_icon("calendar-event", size = "100%"), height = "120px")
                  ),
                  layout_columns(
                    col_widths = 6,
-                   value_box(title = "Uplift at Final Year (Spillover)", value = textOutput("final_uplift_card_spill"), showcase = bs_icon("graph-up"), height = "150px"),
-                   value_box(title = "Avg. Annual Uplift (Spillover)", value = textOutput("annual_uplift_card_spill"), showcase = bs_icon("calendar3-range"), height = "150px")
+                   value_box(title = "Uplift at Final Year (Spillover)", value = textOutput("final_uplift_card_spill"), showcase = bs_icon("graph-up", size = "100%"), max_height = "120px"),
+                   value_box(title = "Avg. Annual Uplift (Spillover)", value = textOutput("annual_uplift_card_spill"), showcase = bs_icon("calendar3-range", size = "100%"), max_height = "120px")
                  ),
                  card(
                    full_screen = TRUE,
@@ -165,12 +204,13 @@ ui <- page_navbar(
                )
              )
            )
-),
+  ),
   # --- TAB 2: Power Analysis ----
   tabPanel("Power Analysis",
            page_sidebar(
              sidebar = sidebar(
                width = "350px",
+               open = "desktop",
                accordion(
                  open = "Design",
                  accordion_panel("Survey Design Parameters", icon = bs_icon("sliders"), value = "Design",
@@ -210,7 +250,9 @@ ui <- page_navbar(
   tabPanel("BACI Credit Simulator",
            page_sidebar(
              sidebar = sidebar(
-               width = "350px", tags$h4("Simulation Controls"),
+               width = "350px", 
+               open = "desktop",
+               tags$h4("Simulation Controls"),
                selectInput("sim_method", "Survey Method", choices = survey_methods_params$Method),
                sliderInput("sim_nctrl", "Number of Control Sites", min = 1, max = 10, value = 5, step = 1),
                sliderInput("sim_ntran", "Number of Transects per Site", min = 1, max = 10, value = 5, step = 1),
