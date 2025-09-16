@@ -84,16 +84,11 @@ ui <- page_navbar(
   # --- THE FIX: Replace the old <head> with this new, more robust CSS ---  
   header = tags$head(
     tags$style(HTML("
-    .value-box-grid {
-      container-type: inline-size;
-    }
-    /* reduce gap between boxes */
-    .value-box-grid .bslib-layout-gap {
-      gap: 0.5rem !important;
-    }
-    .value-box-grid .bslib-value-box {
-      margin: 0.25rem !important;
-    }
+    /* (your existing rules)… */
+    .tab-pane { container-type: inline-size; }
+    .value-box-grid { container-type: inline-size; }
+    .value-box-grid .bslib-layout-gap { gap: 0.5rem !important; }
+    .value-box-grid .bslib-value-box { margin: 0.25rem !important; }
 
     @container (max-width: 600px) {
       .bslib-value-box {
@@ -107,12 +102,41 @@ ui <- page_navbar(
         white-space: normal;
       }
       .bslib-value-box .value-box-value {
-        font-size: clamp(1.2rem, 12cqi, 2.5rem);
+        font-size: clamp(1.0rem, 12cqi, 2.2rem);
       }
       .bslib-value-box .showcase-icon {
-        font-size: clamp(1.5rem, 10cqi, 3rem) !important;
-        top: 0.5rem !important;
-        right: 0.5rem !important;
+        font-size: clamp(1.2rem, 10cqi, 2.6rem) !important;
+        top: 0.5rem !important; right: 0.5rem !important;
+      }
+    }
+
+    /* -------- Compact variant for short cards -------- */
+    /* Desktop & wide containers */
+    .value-box-compact .value-box-title {
+      font-size: clamp(0.65rem, 0.95vw, 0.95rem);
+      line-height: 1.15; white-space: normal;
+    }
+    .value-box-compact .value-box-value {
+      font-size: clamp(0.9rem, 1.4vw, 1.25rem);
+      line-height: 1.15;
+    }
+    .value-box-compact .showcase-icon {
+      font-size: clamp(1.1rem, 1.8vw, 2.0rem) !important;
+    }
+    .value-box-compact .card-body {
+      padding: 0.6rem 0.8rem;   /* tighter to help fit 120px height */
+    }
+
+    /* Narrow containers: shrink a bit more */
+    @container (max-width: 600px) {
+      .value-box-compact .value-box-title {
+        font-size: clamp(0.6rem, 5cqi, 0.9rem);
+      }
+      .value-box-compact .value-box-value {
+        font-size: clamp(0.85rem, 8cqi, 1.15rem);
+      }
+      .value-box-compact .showcase-icon {
+        font-size: clamp(1.0rem, 7cqi, 1.6rem) !important;
       }
     }
   "))
@@ -175,11 +199,11 @@ ui <- page_navbar(
                    div(class = "d-flex",
                        selectInput("explorer_metric", NULL, 
                                    choices = c("Coral Cover" = "Coral_Cover", "Diversity" = "Diversity", "Shelter Volume" = "Shelter_Volume", "RCI" = "RCI"), 
-                                   width = "120px"),
+                                   width = "150px"),
                        # --- THE FIX: Restored the missing choices ---
                        selectInput("explorer_color_by", NULL, 
                                    choices = c("Geomorphic Zone" = "GeomorphicZone", "Reef" = "Reef_Name", "Intervention" = "Intervention", "Deployment Volume" = "Deployment_Volume", "Deployment Flag" = "Deployment_Site_Flag"), 
-                                   selected = "GeomorphicZone", width = "120px"),
+                                   selected = "GeomorphicZone", width = "160px"),
                        radioButtons("plot_display_toggle", NULL, choices = c("Raw Values", "Uplift"), selected = "Raw Values", inline = TRUE)
                    )
                  ),
@@ -233,17 +257,61 @@ ui <- page_navbar(
                  )
                )
              ),
+             # layout_columns(
+             #   col_widths = c(8, 4),
+             #   card(
+             #     card_header("Power Curves by Baseline Condition"),
+             #     plotOutput("powerCurvePlot", height = "600px")
+             #   ),
+             #   card(
+             #     uiOutput("power_summary_cards")
+             #   )
+             # )
+             # ROW 1: four cards (same pattern as Tab 3)
+             # ROW 1: four cards across (same pattern as Tab 3)
+             div(class = "value-box-grid",   # container for your CSS; OUTSIDE the grid
+                 layout_columns(
+                   col_widths = c(3, 3, 3, 3),
+                   value_box(
+                     title = "Selected Uplift",
+                     value = textOutput("power_uplift_txt"), max_height = "120px",
+                     showcase = bs_icon("bullseye", size = "100%"),
+                     class = "value-box-compact",
+                     theme_color = "primary"
+                   ),
+                   value_box(
+                     title = "Chosen Survey Method",
+                     value = textOutput("power_method_txt"), max_height = "120px",
+                     showcase = bs_icon("camera", size = "100%"),
+                     class = "value-box-compact",
+                     theme_color = "primary"
+                   ),
+                   # if you want static color, keep theme_color here; if dynamic, see note below
+                   value_box(
+                     title = "Average Power to Detect",
+                     value = textOutput("power_avg_power_txt"), max_height = "120px",
+                     showcase = bs_icon("check-circle-fill", size = "100%"),
+                     class = "value-box-compact"
+                   ),
+                   value_box(
+                     title = "Estimated Total Cost",
+                     value = textOutput("power_total_cost_txt"), max_height = "120px",
+                     showcase = bs_icon("cash-coin", size = "100%"),
+                     class = "value-box-compact",
+                     theme_color = "primary"
+                   )
+                 )
+             ),
+             
+             # ROW 2: plot
              layout_columns(
-               col_widths = c(8, 4),
+               col_widths = c(12),
                card(
                  card_header("Power Curves by Baseline Condition"),
                  plotOutput("powerCurvePlot", height = "600px")
-               ),
-               card(
-                 uiOutput("power_summary_cards")
                )
              )
-           )
+          )
   ),
   
   # --- TAB 3: BACI Credit Simulator ----
@@ -525,46 +593,85 @@ server <- function(input, output, session) {
       theme(legend.position = "bottom")
   })
   
-  output$power_summary_cards <- renderUI({
-    
+  # output$power_summary_cards <- renderUI({
+  #   
+  #   res <- tryCatch(power_analysis_results(), error = function(e) NULL)
+  #   validate(need(res, "Click 'Run Power Analysis' to see results."))
+  #   
+  #   # --- THE FIX: Summarize across all selected baselines for the card ---
+  #   power_data <- res %>%
+  #     filter(
+  #       N_Controls == input$power_nctrl, 
+  #       N_Transects == input$power_ntran
+  #     ) %>%
+  #     summarise(
+  #       Power_Mean = mean(Power_Mean),
+  #       Power_Lower = min(Power_Lower),
+  #       Power_Upper = max(Power_Upper)
+  #     )
+  #   
+  #   validate(need(nrow(power_data) > 0, "No results for this specific design. Adjust sliders."))
+  #   
+  #   power_text <- paste0(
+  #     scales::percent(power_data$Power_Mean, 0.1),
+  #     " (", scales::percent(power_data$Power_Lower, 0.1), " - ", scales::percent(power_data$Power_Upper, 0.1), ")"
+  #   )
+  #   theme <- if (power_data$Power_Mean >= 0.8) "success" else "danger"
+  #   
+  #   method_params <- survey_methods_params %>% filter(Method == input$power_method_selector)
+  #   n_visits <- input$power_nyears * (if(input$power_frequency == "Annual") 1 else 0.5)
+  #   total_cost <- n_visits * ( (1 + input$power_nctrl) * input$cost_per_site_visit + (1 + input$power_nctrl) * input$power_ntran * method_params$Cost_per_Transect )
+  #   
+  #   tagList(
+  #     value_box(title = "Selected Uplift", value = paste0(input$power_uplift_pct, "% per year"), showcase = bs_icon("bullseye", size = "200%"), theme_color = "primary"),
+  #     value_box(title = "Chosen Survey Method", value = input$power_method_selector, showcase = bs_icon("camera", size = "200%"), theme_color = "primary"),
+  #     value_box(
+  #       title = "Average Power to Detect",
+  #       value = power_text,
+  #       showcase = bs_icon("check-circle-fill", size = "100%"),
+  #       theme_color = theme
+  #     ),
+  #     value_box(title = "Estimated Total Cost", value = paste0("$", prettyNum(total_cost, big.mark = ",")), showcase = bs_icon("cash-coin", size = "200%"), theme_color = "primary")
+  #   )
+  # })
+  # Tab 2: card texts
+  output$power_uplift_txt <- renderText({
+    paste0(input$power_uplift_pct, "% per year")
+  })
+  
+  output$power_method_txt <- renderText({
+    input$power_method_selector
+  })
+  
+  output$power_avg_power_txt <- renderText({
     res <- tryCatch(power_analysis_results(), error = function(e) NULL)
-    validate(need(res, "Click 'Run Power Analysis' to see results."))
+    validate(need(!is.null(res), "Click 'Run Power Analysis'"))
     
-    # --- THE FIX: Summarize across all selected baselines for the card ---
-    power_data <- res %>%
-      filter(
-        N_Controls == input$power_nctrl, 
-        N_Transects == input$power_ntran
-      ) %>%
-      summarise(
-        Power_Mean = mean(Power_Mean),
+    pd <- res %>%
+      dplyr::filter(N_Controls == input$power_nctrl, N_Transects == input$power_ntran) %>%
+      dplyr::summarise(
+        Power_Mean  = mean(Power_Mean),
         Power_Lower = min(Power_Lower),
-        Power_Upper = max(Power_Upper)
+        Power_Upper = max(Power_Upper),
+        .groups = "drop"
       )
+    validate(need(nrow(pd) > 0, "Adjust design and re-run"))
     
-    validate(need(nrow(power_data) > 0, "No results for this specific design. Adjust sliders."))
-    
-    power_text <- paste0(
-      scales::percent(power_data$Power_Mean, 0.1),
-      " (", scales::percent(power_data$Power_Lower, 0.1), " - ", scales::percent(power_data$Power_Upper, 0.1), ")"
+    paste0(
+      scales::percent(pd$Power_Mean, 0.1),
+      " (", scales::percent(pd$Power_Lower, 0.1),
+      " – ", scales::percent(pd$Power_Upper, 0.1), ")"
     )
-    theme <- if (power_data$Power_Mean >= 0.8) "success" else "danger"
+  })
+  
+  output$power_total_cost_txt <- renderText({
+    method_params <- survey_methods_params %>%
+      dplyr::filter(Method == input$power_method_selector)
     
-    method_params <- survey_methods_params %>% filter(Method == input$power_method_selector)
-    n_visits <- input$power_nyears * (if(input$power_frequency == "Annual") 1 else 0.5)
-    total_cost <- n_visits * ( (1 + input$power_nctrl) * input$cost_per_site_visit + (1 + input$power_nctrl) * input$power_ntran * method_params$Cost_per_Transect )
-    
-    tagList(
-      value_box(title = "Selected Uplift", value = paste0(input$power_uplift_pct, "% per year"), showcase = bs_icon("bullseye"), theme_color = "primary"),
-      value_box(title = "Chosen Survey Method", value = input$power_method_selector, showcase = bs_icon("camera"), theme_color = "primary"),
-      value_box(
-        title = "Average Power to Detect",
-        value = power_text,
-        showcase = bs_icon("check-circle-fill"),
-        theme_color = theme
-      ),
-      value_box(title = "Estimated Total Cost", value = paste0("$", prettyNum(total_cost, big.mark = ",")), showcase = bs_icon("cash-coin"), theme_color = "primary")
-    )
+    n_visits <- input$power_nyears * (if (input$power_frequency == "Annual") 1 else 0.5)
+    total_cost <- n_visits * ( (1 + input$power_nctrl) * input$cost_per_site_visit +
+                                 (1 + input$power_nctrl) * input$power_ntran * method_params$Cost_per_Transect )
+    paste0("$", prettyNum(total_cost, big.mark = ","))
   })
 
   
