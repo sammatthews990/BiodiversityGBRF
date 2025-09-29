@@ -6,102 +6,6 @@ library(tidyr)
 library(rstanarm)
 library(INLA)
 
-survey_methods_params <- tribble(
-  ~Method,                   ~SD_Precision, ~Cost_per_Transect,
-  "Benthic Photo Transects", 0.04,         50,
-  "RHIS (Rapid Survey)",     0.120,         25,
-  "Detailed Orthomosaic",    0.030,         200,
-  "ReefScan (AI Towed)",     0.06,         35
-)
-
-# ... (existing functions and METRIC_DEFINITIONS) ...
-
-#' Run a Statistical Power Analysis for a BACI Design
-#'
-#' This function calculates the statistical power to detect a specified annual
-#' trend (uplift) given a set of survey design parameters and variability assumptions.
-#' It iterates through multiple scenarios for the number of control sites, transects,
-#' and baseline conditions.
-#'
-#' @param target_uplift_pct The annual percentage uplift you want to be able to detect (e.g., 3 for 3%).
-#' @param monitoring_years The total number of years for the monitoring program.
-#' @param monitoring_frequency A string, either "Annual" or "Biennial".
-#' @param survey_precision_sd The standard deviation associated with the measurement error of the chosen survey method.
-#' @param peak_spatial_sd The peak standard deviation for spatial patchiness, anchored at 50% cover.
-#' @param temporal_sd The residual year-to-year temporal standard deviation.
-#' @param baseline_cover_pct A numeric vector of baseline coral cover percentages to test (e.g., c(10, 30, 50)).
-#' @param n_ctrl_values A numeric vector of the number of control sites to test (e.g., c(3, 5, 8)).
-#' @param n_transect_values A numeric vector of the number of transects per site to test (e.g., 1:20).
-#' @param n_sims The number of Monte Carlo simulations to run for estimating confidence intervals on the power.
-#' @return A tibble containing the calculated power (Power_Mean) and confidence intervals (Power_Lower, Power_Upper) for each combination of input parameters.
-
-run_power_analysis <- function(
-    target_uplift_pct,
-    monitoring_years,
-    monitoring_frequency,
-    survey_precision_sd,
-    peak_spatial_sd,
-    temporal_sd,
-    baseline_cover_pct,
-    n_ctrl_values,
-    n_transect_values = 1:20,
-    n_sims = 10000
-) {
-  
-  # --- 1. Set up parameters ---
-  annual_trend <- target_uplift_pct / 100
-  baselines <- baseline_cover_pct / 100
-  
-  # Determine the time points for the regression based on frequency
-  time_points <- if (monitoring_frequency == "Annual") {
-    seq(0, monitoring_years, by = 1)
-  } else {
-    seq(0, monitoring_years, by = 2)
-  }
-  sum_sq_t <- sum((time_points - mean(time_points))^2)
-  
-  # --- 2. Create all scenarios to be tested ---
-  scenarios <- tidyr::crossing(
-    N_Controls = n_ctrl_values,
-    N_Transects = n_transect_values,
-    Baseline_Cover = baselines
-  )
-  
-  # --- 3. Define the core calculation for a single scenario ---
-  run_one_scenario <- function(n_ctrl, n_tran, baseline) {
-    # Calculate the dynamic spatial SD based on the baseline cover
-    dynamic_sd_spatial <- calculate_dynamic_sd(p = baseline, anchor_p = 0.5, anchor_sd = peak_spatial_sd)
-    
-    # Combine sources of variance
-    total_transect_sd <- sqrt(dynamic_sd_spatial^2 + survey_precision_sd^2)
-    var_site_year <- (total_transect_sd^2 / n_tran) + temporal_sd^2
-    
-    # Calculate the standard error of the slope (interaction term)
-    se_slope <- sqrt((var_site_year / sum_sq_t) * (1 + 1 / n_ctrl))
-    
-    # Calculate power using the non-centrality parameter of the t-distribution
-    ncp <- annual_trend / se_slope
-    # The probability of rejecting the null hypothesis (i.e., power)
-    power_estimate <- pt(qt(0.975, df = n_ctrl), df = n_ctrl, ncp = ncp, lower.tail = FALSE)
-    
-    # Simulate confidence intervals for this power estimate
-    detected <- rbinom(n_sims, 1, power_estimate)
-    ci <- binom.test(sum(detected), n_sims)$conf.int
-    
-    tibble(Power_Mean = mean(detected), Power_Lower = ci[1], Power_Upper = ci[2])
-  }
-  
-  # --- 4. Run the calculation across all scenarios and return results ---
-  results <- scenarios %>%
-    mutate(
-      results = purrr::pmap(list(N_Controls, N_Transects, Baseline_Cover), run_one_scenario)
-    ) %>%
-    unnest(results)
-  
-  return(results)
-}
-
-
 calculate_dynamic_sd <- function(p, anchor_p, anchor_sd) {
   k <- anchor_sd / sqrt(max(anchor_p * (1 - anchor_p), 1e-9))
   dynamic_sd <- k * sqrt(p * (1 - p))
@@ -273,5 +177,3 @@ run_baci_analysis <- function(
     raw_data = observed_data %>% select(Metric, Year, Site_ID, Site_Type, Transect_ID, True_Value, Observed_Value)
   ))
 }
-
-

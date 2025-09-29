@@ -246,8 +246,8 @@ ui <- page_navbar(
                                  selectInput("power_nctrl_selector", "Number of Control Sites to Plot", choices = 1:10, multiple = TRUE, selected = c(3, 5, 8))
                  ),
                  accordion_panel("Variability Assumptions", icon = bs_icon("graph-up-arrow"),
-                                 numericInput("power_sd_spatial_peak", "Peak Spatial Patchiness (SD at 50% Cover)", value = 0.12, min = 0.01, max = 0.2, step = 0.01),
-                                 numericInput("power_sd_temporal", "Residual Temporal SD", value = 0.02, min = 0.01, max = 0.2, step = 0.01),
+                                 numericInput("power_sd_spatial_peak", "Peak Spatial Patchiness (SD at 50% Cover)", value = 0.03, min = 0.01, max = 0.2, step = 0.01),
+                                 numericInput("power_sd_temporal", "Residual Temporal SD", value = 0.04, min = 0.01, max = 0.2, step = 0.01),
                                  checkboxGroupInput("power_baselines_pct", "Baseline Coral Cover (%)", choices = c(10, 30, 50, 70), selected = c(10, 30, 50))
                  ),
                  accordion_panel("Survey Method & Cost", icon = bs_icon("gear"),
@@ -494,30 +494,53 @@ server <- function(input, output, session) {
 
   
   # --- SERVER LOGIC FOR TAB 2: Power Analysis ----
-  # --- SERVER LOGIC FOR TAB 2: Power Analysis ----
   power_analysis_results <- eventReactive(input$run_power_analysis, {
     
-    showNotification("Running power analysis simulation...", type = "message", duration = 5)
+    showNotification("Running Monte Carlo simulation (10,000 iterations)... this may take a moment.", type = "message", duration = 10)
     
-    # 1. Look up the survey precision from the selected method
-    method_params <- survey_methods_params %>% 
-      filter(Method == input$power_method_selector)
-    
-    validate(need(nrow(method_params) == 1, "Selected survey method not found."))
+    n_sims <- 10000
+    annual_trend <- input$power_uplift_pct / 100
+    nyears <- input$power_nyears
+    method_params <- survey_methods_params %>% filter(Method == input$power_method_selector)
     sd_precision <- method_params$SD_Precision
+    peak_sd_spatial <- req(input$power_sd_spatial_peak)
+    sd_temporal <- req(input$power_sd_temporal)
+    baselines <- as.numeric(req(input$power_baselines_pct)) / 100
     
-    # 2. Call the new, standalone function with inputs from the UI
-    run_power_analysis(
-      target_uplift_pct   = req(input$power_uplift_pct),
-      monitoring_years    = req(input$power_nyears),
-      monitoring_frequency= req(input$power_frequency),
-      survey_precision_sd = sd_precision,
-      peak_spatial_sd     = req(input$power_sd_spatial_peak),
-      temporal_sd         = req(input$power_sd_temporal),
-      baseline_cover_pct  = as.numeric(req(input$power_baselines_pct)),
-      n_ctrl_values       = as.numeric(req(input$power_nctrl_selector))
-      # n_transect_values is left as the default 1:20
+    n_ctrl_seq <- as.numeric(req(input$power_nctrl_selector))
+    transect_seq <- 1:20
+    
+    time_points <- if(input$power_frequency == "Annual") seq(0, nyears, by=1) else seq(0, nyears, by=2)
+    sum_sq_t <- sum((time_points - mean(time_points))^2)
+    
+    scenarios <- tidyr::crossing(
+      N_Controls = n_ctrl_seq,
+      N_Transects = transect_seq,
+      Baseline_Cover = baselines
     )
+    
+    run_one_scenario <- function(n_ctrl, n_tran, baseline) {
+      dynamic_sd_spatial <- calculate_dynamic_sd(p = baseline, anchor_p = 0.5, anchor_sd = peak_sd_spatial)
+      total_transect_sd <- sqrt(dynamic_sd_spatial^2 + sd_precision^2)
+      var_site_year <- (total_transect_sd^2 / n_tran) + sd_temporal^2
+      se_slope <- sqrt( (var_site_year / sum_sq_t) * (1 + 1/n_ctrl) )
+      
+      ncp <- annual_trend / se_slope
+      p_values <- pt(qt(0.975, df = n_ctrl), df = n_ctrl, ncp = ncp, lower.tail = FALSE)
+      
+      detected <- rbinom(n_sims, 1, p_values)
+      
+      ci <- binom.test(sum(detected), n_sims)$conf.int
+      tibble(Power_Mean = mean(detected), Power_Lower = ci[1], Power_Upper = ci[2])
+    }
+    
+    results <- scenarios %>%
+      mutate(
+        results = purrr::pmap(list(N_Controls, N_Transects, Baseline_Cover), run_one_scenario)
+      ) %>%
+      unnest(results)
+    
+    return(results)
   })
   
   output$powerCurvePlot <- renderPlot({
