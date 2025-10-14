@@ -256,8 +256,15 @@ ui <- page_navbar(
                                               value = 0, min = 0, max = 0.5, step = 0.01)
                  ),
                  accordion_panel("Survey Method & Cost", icon = bs_icon("gear"),
-                                 selectInput("power_method_selector", "Survey Method", choices = survey_methods_params$Method, selected = "Benthic Photo Transects"),
-                                 numericInput("cost_per_site_visit", "Cost per Site Visit", value = 500, min=0),
+                                 # REPLACE the single selectInput with these two
+                                 selectInput("power_method_benthic", "Benthic Survey Method", 
+                                             choices = benthic_survey_params$Method, 
+                                             selected = "Benthic Photo Transects"),
+                                 selectInput("power_method_fish", "Fish Survey Method", 
+                                             choices = fish_survey_params$Method, 
+                                             selected = "Underwater Visual Census (UVC)"),
+                                 
+                                 numericInput("cost_per_site_visit", "Cost per Site Visit (Logistics)", value = 500, min=0),
                                  actionButton("run_power_analysis", "Run Power Analysis", class = "btn-primary w-100", icon = icon("play"))
                  )
                )
@@ -266,27 +273,27 @@ ui <- page_navbar(
                  layout_columns(
                    col_widths = c(3, 3, 3, 3),
                    value_box(
-                     title = "Min. Detectable Uplift (at 80% Power)",
+                     title = "Min. Detectable Uplift (at 80% Power)", max_height = "120px",
                      value = textOutput("power_mdes_txt"),
                      showcase = bs_icon("search-heart", size = "100%"),
                      class = "value-box-compact"
                    ),
                    value_box(
                      title = "Power for Target Uplift",
-                     value = textOutput("power_avg_power_txt"),
+                     value = textOutput("power_avg_power_txt"),max_height = "120px",
                      showcase = bs_icon("check-circle-fill", size = "100%"),
                      class = "value-box-compact"
                    ),
                    value_box(
                      title = "Target Uplift",
-                     value = textOutput("power_uplift_txt"),
+                     value = textOutput("power_uplift_txt"), max_height = "120px",
                      showcase = bs_icon("bullseye", size = "100%"),
                      class = "value-box-compact",
                      theme_color = "primary"
                    ),
                    value_box(
                      title = "Estimated Total Cost",
-                     value = textOutput("power_total_cost_txt"),
+                     value = textOutput("power_total_cost_txt"), max_height = "120px",
                      showcase = bs_icon("cash-coin", size = "100%"),
                      class = "value-box-compact",
                      theme_color = "primary"
@@ -489,37 +496,52 @@ server <- function(input, output, session) {
     metric_name <- req(input$power_metric)
     
     if (metric_name == "Composite Index (RCI)") {
-      # For RCI, average the variances of the 6 core metrics
       avg_vars <- METRIC_DEFINITIONS %>%
         summarise(
-          Spatial_SD = sqrt(mean(Spatial_SD^2, na.rm = TRUE)),
-          Temporal_SD = sqrt(mean(Temporal_SD^2, na.rm = TRUE))
+          Spatial_SD = sqrt(mean(Spatial_SD^2)),
+          Temporal_SD = sqrt(mean(Temporal_SD^2))
         )
-      return(list(spatial = avg_vars$Spatial_SD, temporal = avg_vars$Temporal_SD))
+      # For RCI, the type is composite
+      return(list(spatial = avg_vars$Spatial_SD, temporal = avg_vars$Temporal_SD, type = "Composite"))
     } else {
-      # For a specific metric, look it up in the table
       params <- METRIC_DEFINITIONS %>% filter(Metric == metric_name)
-      return(list(spatial = params$Spatial_SD, temporal = params$Temporal_SD))
+      return(list(spatial = params$Spatial_SD, temporal = params$Temporal_SD, type = params$Metric_Type))
     }
   })
   
-  # Auto-update the UI numeric inputs to show the underlying SDs
+  # Reactive to get the correct SURVEY PRECISION based on the selected metric type
+  selected_survey_precision <- reactive({
+    params <- selected_metric_params()
+    
+    benthic_prec <- benthic_survey_params$SD_Precision[benthic_survey_params$Method == req(input$power_method_benthic)]
+    fish_prec <- fish_survey_params$SD_Precision[fish_survey_params$Method == req(input$power_method_fish)]
+    
+    if (params$type == "Benthic") {
+      return(benthic_prec)
+    } else if (params$type == "Fish") {
+      return(fish_prec)
+    } else { # Composite
+      # For the RCI, the measurement error is a combination of both survey types.
+      # We will average the variance of the two selected methods.
+      return(sqrt(mean(c(benthic_prec^2, fish_prec^2))))
+    }
+  })
+  
+  # Auto-update the UI numeric inputs
   observe({
     params <- selected_metric_params()
     updateNumericInput(session, "power_sd_spatial", value = round(params$spatial, 3))
     updateNumericInput(session, "power_sd_temporal", value = round(params$temporal, 3))
   })
   
-  # Reactive that calculates key values for the top cards (MDES and cost)
+  # Reactive that calculates key values for the top cards
   power_card_calcs <- reactive({
     req(input$power_nctrl, input$power_ntran, selected_metric_params())
     
     params <- selected_metric_params()
     sd_spatial <- params$spatial
     sd_temporal <- params$temporal
-    
-    method_params <- survey_methods_params %>% filter(Method == input$power_method_selector)
-    sd_precision <- method_params$SD_Precision
+    sd_precision <- selected_survey_precision()
     
     nyears <- input$power_nyears
     time_points <- if (input$power_frequency == "Annual") seq(0, nyears, by = 1) else seq(0, nyears, by = 2)
@@ -531,9 +553,14 @@ server <- function(input, output, session) {
     
     mdes <- calculate_mdes(power = 0.80, df = input$power_nctrl, se_slope = se_slope)
     
+    # NEW COST CALCULATION: Sums the cost of BOTH survey methods
+    benthic_cost <- benthic_survey_params$Cost_per_Transect[benthic_survey_params$Method == req(input$power_method_benthic)]
+    fish_cost <- fish_survey_params$Cost_per_Transect[fish_survey_params$Method == req(input$power_method_fish)]
+    total_transect_cost <- benthic_cost + fish_cost
+    
     n_visits <- nyears * (if (input$power_frequency == "Annual") 1 else 0.5)
     total_cost <- n_visits * ((1 + input$power_nctrl) * input$cost_per_site_visit +
-                                (1 + input$power_nctrl) * input$power_ntran * method_params$Cost_per_Transect)
+                                (1 + input$power_nctrl) * input$power_ntran * total_transect_cost)
     
     list(mdes = mdes, total_cost = total_cost)
   })
@@ -553,35 +580,30 @@ server <- function(input, output, session) {
     paste0(input$power_uplift_pct, "% per year")
   })
   
-  # This eventReactive now only runs the main simulation for the plot
+  # This eventReactive now runs the main simulation for the plot
   power_analysis_results <- eventReactive(input$run_power_analysis, {
     showNotification("Running power analysis simulation...", type = "message", duration = 5)
     params <- selected_metric_params()
+    sd_precision <- selected_survey_precision()
     
-    # We now call the standalone function from baci_analysis_functions.R
     run_power_analysis(
       target_uplift_pct = req(input$power_uplift_pct),
       monitoring_years = req(input$power_nyears),
       monitoring_frequency = req(input$power_frequency),
-      survey_precision_sd = survey_methods_params$SD_Precision[survey_methods_params$Method == req(input$power_method_selector)],
+      survey_precision_sd = sd_precision,
       peak_spatial_sd = params$spatial,
       temporal_sd = params$temporal,
-      baseline_cover_pct = 30, # No longer needs multiple baselines
+      baseline_cover_pct = 30,
       n_ctrl_values = as.numeric(req(input$power_nctrl_selector)),
       n_transect_values = 1:20
     )
   })
   
-  # We also need to update the power card, as the plot may not have run yet.
   output$power_avg_power_txt <- renderText({
     res <- tryCatch(power_analysis_results(), error = function(e) NULL)
     validate(need(!is.null(res), "Click 'Run Power Analysis'"))
-    
-    pd <- res %>%
-      filter(N_Controls == input$power_nctrl, N_Transects == input$power_ntran)
-    
+    pd <- res %>% filter(N_Controls == input$power_nctrl, N_Transects == input$power_ntran)
     validate(need(nrow(pd) > 0, "Adjust design and re-run"))
-    
     paste0(
       scales::percent(pd$Power_Mean, 0.1),
       " (", scales::percent(pd$Power_Lower, 0.1),
@@ -611,14 +633,14 @@ server <- function(input, output, session) {
       scale_x_continuous(breaks = scales::pretty_breaks()) +
       labs(
         title = paste("Power to Detect a", input$power_uplift_pct, "% Annual Uplift in", input$power_metric),
-        subtitle = paste("Using", input$power_method_selector),
+        subtitle = paste("Using:", input$power_method_benthic, "&", input$power_method_fish),
         x = "Number of Transects per Site",
         y = "Statistical Power"
       ) +
       theme_minimal(base_size = 14)
   })
   
-  # --- SERVER LOGIC FOR BACI Simulation Tab ---
+# --- SERVER LOGIC FOR BACI Simulation Tab ----
   observeEvent(input$sim_nyears, {
     nyears <- input$sim_nyears
     updateSliderInput(session, "sim_intervention_year", max = nyears, value = min(input$sim_intervention_year, nyears))

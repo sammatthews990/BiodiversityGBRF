@@ -6,13 +6,42 @@ library(tidyr)
 library(rstanarm)
 library(INLA)
 
-survey_methods_params <- tribble(
+# survey_methods_params <- tribble(
+#   ~Method,                   ~SD_Precision, ~Cost_per_Transect,
+#   "Benthic Photo Transects", 0.04,         50,
+#   "RHIS (Rapid Survey)",     0.120,         25,
+#   "Detailed Orthomosaic",    0.030,         200,
+#   "ReefScan (AI Towed)",     0.06,         35
+# )
+
+# 1. REPLACE survey_methods_params with TWO new tables
+benthic_survey_params <- tribble(
   ~Method,                   ~SD_Precision, ~Cost_per_Transect,
-  "Benthic Photo Transects", 0.04,         50,
-  "RHIS (Rapid Survey)",     0.120,         25,
-  "Detailed Orthomosaic",    0.030,         200,
-  "ReefScan (AI Towed)",     0.06,         35
+  "Benthic Photo Transects", 0.045,         50,
+  "Detailed Orthomosaic",    0.020,         200,
+  "ReefScan (AI Towed)",     0.035,         35
 )
+
+fish_survey_params <- tribble(
+  ~Method,                          ~SD_Precision, ~Cost_per_Transect,
+  "Underwater Visual Census (UVC)", 0.20,          40,
+  "Diver Operated Video (DOV)",     0.18,          60,
+  "Baited Remote Video (BRUV)",     0.25,          75
+)
+
+
+# 2. UPDATE METRIC_DEFINITIONS to include a Metric_Type column
+if (!exists("METRIC_DEFINITIONS")) {
+  METRIC_DEFINITIONS <- tribble(
+    ~Metric,                ~Metric_Type, ~Mean_Baseline, ~Spatial_SD, ~Temporal_SD,
+    "Coral Cover",          "Benthic",    0.30,           0.05,        0.04,
+    "Structural Complexity","Benthic",    0.40,           0.06,        0.05,
+    "Algal Cover",          "Benthic",    0.20,           0.08,        0.06,
+    "Fish Biomass",         "Fish",       0.50,           0.12,        0.08,
+    "Fish Diversity",       "Fish",       0.60,           0.07,        0.07,
+    "Invertebrate Density", "Benthic",    0.35,           0.10,        0.09 # Often benthic surveys
+  )
+}
 
 # ... (existing functions and METRIC_DEFINITIONS) ...
 
@@ -132,18 +161,7 @@ calculate_dynamic_sd <- function(p, anchor_p, anchor_sd) {
   return(dynamic_sd)
 }
 
-# This check allows the script to be run standalone for auditing.
-if (!exists("METRIC_DEFINITIONS")) {
-  METRIC_DEFINITIONS <- tribble(
-    ~Metric,                ~Mean_Baseline, ~Spatial_SD, ~Temporal_SD,
-    "Coral Cover",          0.30,           0.05,        0.04,
-    "Structural Complexity",0.40,           0.06,        0.05,
-    "Algal Cover",          0.20,           0.08,        0.06,
-    "Fish Biomass",         0.50,           0.12,        0.08,
-    "Fish Diversity",       0.60,           0.07,        0.07,
-    "Invertebrate Density", 0.35,           0.10,        0.09
-  )
-}
+
 
 run_baci_analysis <- function(
     analysis_method, n_sites_ctrl, n_transects, n_years, intervention_year, 
