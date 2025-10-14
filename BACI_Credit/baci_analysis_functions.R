@@ -101,6 +101,30 @@ run_power_analysis <- function(
   return(results)
 }
 
+#' Calculate the Minimum Detectable Effect Size (MDES)
+#'
+#' @param power The desired statistical power (e.g., 0.80).
+#' @param df Degrees of freedom, typically the number of control sites.
+#' @param se_slope The standard error of the slope (interaction term).
+#' @return The smallest annual trend (uplift) that can be detected with the specified power.
+calculate_mdes <- function(power, df, se_slope) {
+  # Find the non-centrality parameter (ncp) required to achieve the target power
+  # We need to find the root of the function `power_function(ncp) - target_power = 0`
+  objective_function <- function(ncp) {
+    pt(qt(0.975, df = df), df = df, ncp = ncp, lower.tail = FALSE) - power
+  }
+  
+  # Use uniroot to find the ncp. Search in a reasonable interval.
+  required_ncp <- tryCatch(
+    uniroot(objective_function, interval = c(1e-9, 50))$root,
+    error = function(e) NA # Return NA if it can't be solved
+  )
+  
+  # MDES is the required NCP multiplied by the standard error
+  mdes <- required_ncp * se_slope
+  return(mdes)
+}
+
 
 calculate_dynamic_sd <- function(p, anchor_p, anchor_sd) {
   k <- anchor_sd / sqrt(max(anchor_p * (1 - anchor_p), 1e-9))
@@ -111,13 +135,13 @@ calculate_dynamic_sd <- function(p, anchor_p, anchor_sd) {
 # This check allows the script to be run standalone for auditing.
 if (!exists("METRIC_DEFINITIONS")) {
   METRIC_DEFINITIONS <- tribble(
-    ~Metric,                ~Mean_Baseline, ~Temporal_SD,
-    "Coral Cover",          0.30,           0.04,
-    "Structural Complexity",0.40,           0.05,
-    "Algal Cover",          0.20,           0.06,
-    "Fish Biomass",         0.50,           0.08,
-    "Fish Diversity",       0.60,           0.07,
-    "Invertebrate Density", 0.35,           0.09
+    ~Metric,                ~Mean_Baseline, ~Spatial_SD, ~Temporal_SD,
+    "Coral Cover",          0.30,           0.05,        0.04,
+    "Structural Complexity",0.40,           0.06,        0.05,
+    "Algal Cover",          0.20,           0.08,        0.06,
+    "Fish Biomass",         0.50,           0.12,        0.08,
+    "Fish Diversity",       0.60,           0.07,        0.07,
+    "Invertebrate Density", 0.35,           0.10,        0.09
   )
 }
 

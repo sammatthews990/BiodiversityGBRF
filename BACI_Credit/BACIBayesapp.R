@@ -24,12 +24,10 @@ survey_methods_params <- tribble(
   "Detailed Orthomosaic",    0.020,         200,
   "ReefScan (AI Towed)",     0.035,         35
 )
-METRIC_DEFINITIONS <- tribble(
-  ~Metric,                ~Mean_Baseline, ~Temporal_SD,
-  "Coral Cover",          0.30,           0.04,
-  "Structural Complexity",0.40,           0.05,
-  "Fish Biomass",         0.50,           0.08
-)
+
+cat("--- METRIC_DEFINITIONS Loaded by App ---\n") # Add this line
+print(head(METRIC_DEFINITIONS))                    # Add this line
+cat("----------------------------------------\n") # Add this line
 
 # --- Data Loading and PRE-PROCESSING for Model Explorer ----
 # This section now includes the crucial UPLIFT CALCULATION.
@@ -230,6 +228,7 @@ ui <- page_navbar(
            )
   ),
   # --- TAB 2: Power Analysis ----
+  # --- TAB 2: Power Analysis ----
   tabPanel("Power Analysis",
            page_sidebar(
              sidebar = sidebar(
@@ -246,9 +245,15 @@ ui <- page_navbar(
                                  selectInput("power_nctrl_selector", "Number of Control Sites to Plot", choices = 1:10, multiple = TRUE, selected = c(3, 5, 8))
                  ),
                  accordion_panel("Variability Assumptions", icon = bs_icon("graph-up-arrow"),
-                                 numericInput("power_sd_spatial_peak", "Peak Spatial Patchiness (SD at 50% Cover)", value = 0.12, min = 0.01, max = 0.2, step = 0.01),
-                                 numericInput("power_sd_temporal", "Residual Temporal SD", value = 0.02, min = 0.01, max = 0.2, step = 0.01),
-                                 checkboxGroupInput("power_baselines_pct", "Baseline Coral Cover (%)", choices = c(10, 30, 50, 70), selected = c(10, 30, 50))
+                                 # NEW: Selector for the metric of interest
+                                 selectInput("power_metric", "Metric to Analyze", 
+                                             choices = c("Composite Index (RCI)", METRIC_DEFINITIONS$Metric)),
+                                 
+                                 # UPDATED: These inputs are now auto-populated and disabled
+                                 numericInput("power_sd_spatial", "SD among Transects (within a Site)", 
+                                              value = 0, min = 0, max = 0.5, step = 0.01),
+                                 numericInput("power_sd_temporal", "SD of Site Means (year-to-year)", 
+                                              value = 0, min = 0, max = 0.5, step = 0.01)
                  ),
                  accordion_panel("Survey Method & Cost", icon = bs_icon("gear"),
                                  selectInput("power_method_selector", "Survey Method", choices = survey_methods_params$Method, selected = "Benthic Photo Transects"),
@@ -257,61 +262,45 @@ ui <- page_navbar(
                  )
                )
              ),
-             # layout_columns(
-             #   col_widths = c(8, 4),
-             #   card(
-             #     card_header("Power Curves by Baseline Condition"),
-             #     plotOutput("powerCurvePlot", height = "600px")
-             #   ),
-             #   card(
-             #     uiOutput("power_summary_cards")
-             #   )
-             # )
-             # ROW 1: four cards (same pattern as Tab 3)
-             # ROW 1: four cards across (same pattern as Tab 3)
-             div(class = "value-box-grid",   # container for your CSS; OUTSIDE the grid
+             div(class = "value-box-grid",
                  layout_columns(
                    col_widths = c(3, 3, 3, 3),
                    value_box(
-                     title = "Selected Uplift",
-                     value = textOutput("power_uplift_txt"), max_height = "120px",
+                     title = "Min. Detectable Uplift (at 80% Power)",
+                     value = textOutput("power_mdes_txt"),
+                     showcase = bs_icon("search-heart", size = "100%"),
+                     class = "value-box-compact"
+                   ),
+                   value_box(
+                     title = "Power for Target Uplift",
+                     value = textOutput("power_avg_power_txt"),
+                     showcase = bs_icon("check-circle-fill", size = "100%"),
+                     class = "value-box-compact"
+                   ),
+                   value_box(
+                     title = "Target Uplift",
+                     value = textOutput("power_uplift_txt"),
                      showcase = bs_icon("bullseye", size = "100%"),
                      class = "value-box-compact",
                      theme_color = "primary"
                    ),
                    value_box(
-                     title = "Chosen Survey Method",
-                     value = textOutput("power_method_txt"), max_height = "120px",
-                     showcase = bs_icon("camera", size = "100%"),
-                     class = "value-box-compact",
-                     theme_color = "primary"
-                   ),
-                   # if you want static color, keep theme_color here; if dynamic, see note below
-                   value_box(
-                     title = "Average Power to Detect",
-                     value = textOutput("power_avg_power_txt"), max_height = "120px",
-                     showcase = bs_icon("check-circle-fill", size = "100%"),
-                     class = "value-box-compact"
-                   ),
-                   value_box(
                      title = "Estimated Total Cost",
-                     value = textOutput("power_total_cost_txt"), max_height = "120px",
+                     value = textOutput("power_total_cost_txt"),
                      showcase = bs_icon("cash-coin", size = "100%"),
                      class = "value-box-compact",
                      theme_color = "primary"
                    )
                  )
              ),
-             
-             # ROW 2: plot
              layout_columns(
                col_widths = c(12),
                card(
-                 card_header("Power Curves by Baseline Condition"),
+                 card_header("Power Curves by Metric"),
                  plotOutput("powerCurvePlot", height = "600px")
                )
              )
-          )
+           )
   ),
   
   # --- TAB 3: BACI Credit Simulator ----
@@ -494,144 +483,103 @@ server <- function(input, output, session) {
 
   
   # --- SERVER LOGIC FOR TAB 2: Power Analysis ----
-  # --- SERVER LOGIC FOR TAB 2: Power Analysis ----
-  power_analysis_results <- eventReactive(input$run_power_analysis, {
+  
+  # Reactive to get the correct SDs for the chosen metric
+  selected_metric_params <- reactive({
+    metric_name <- req(input$power_metric)
     
-    showNotification("Running power analysis simulation...", type = "message", duration = 5)
+    if (metric_name == "Composite Index (RCI)") {
+      # For RCI, average the variances of the 6 core metrics
+      avg_vars <- METRIC_DEFINITIONS %>%
+        summarise(
+          Spatial_SD = sqrt(mean(Spatial_SD^2, na.rm = TRUE)),
+          Temporal_SD = sqrt(mean(Temporal_SD^2, na.rm = TRUE))
+        )
+      return(list(spatial = avg_vars$Spatial_SD, temporal = avg_vars$Temporal_SD))
+    } else {
+      # For a specific metric, look it up in the table
+      params <- METRIC_DEFINITIONS %>% filter(Metric == metric_name)
+      return(list(spatial = params$Spatial_SD, temporal = params$Temporal_SD))
+    }
+  })
+  
+  # Auto-update the UI numeric inputs to show the underlying SDs
+  observe({
+    params <- selected_metric_params()
+    updateNumericInput(session, "power_sd_spatial", value = round(params$spatial, 3))
+    updateNumericInput(session, "power_sd_temporal", value = round(params$temporal, 3))
+  })
+  
+  # Reactive that calculates key values for the top cards (MDES and cost)
+  power_card_calcs <- reactive({
+    req(input$power_nctrl, input$power_ntran, selected_metric_params())
     
-    # 1. Look up the survey precision from the selected method
-    method_params <- survey_methods_params %>% 
-      filter(Method == input$power_method_selector)
+    params <- selected_metric_params()
+    sd_spatial <- params$spatial
+    sd_temporal <- params$temporal
     
-    validate(need(nrow(method_params) == 1, "Selected survey method not found."))
+    method_params <- survey_methods_params %>% filter(Method == input$power_method_selector)
     sd_precision <- method_params$SD_Precision
     
-    # 2. Call the new, standalone function with inputs from the UI
-    run_power_analysis(
-      target_uplift_pct   = req(input$power_uplift_pct),
-      monitoring_years    = req(input$power_nyears),
-      monitoring_frequency= req(input$power_frequency),
-      survey_precision_sd = sd_precision,
-      peak_spatial_sd     = req(input$power_sd_spatial_peak),
-      temporal_sd         = req(input$power_sd_temporal),
-      baseline_cover_pct  = as.numeric(req(input$power_baselines_pct)),
-      n_ctrl_values       = as.numeric(req(input$power_nctrl_selector))
-      # n_transect_values is left as the default 1:20
-    )
+    nyears <- input$power_nyears
+    time_points <- if (input$power_frequency == "Annual") seq(0, nyears, by = 1) else seq(0, nyears, by = 2)
+    sum_sq_t <- sum((time_points - mean(time_points))^2)
+    
+    var_within_site <- sd_spatial^2 + sd_precision^2
+    var_site_year <- (var_within_site / input$power_ntran) + sd_temporal^2
+    se_slope <- sqrt((var_site_year / sum_sq_t) * (1 + 1 / input$power_nctrl))
+    
+    mdes <- calculate_mdes(power = 0.80, df = input$power_nctrl, se_slope = se_slope)
+    
+    n_visits <- nyears * (if (input$power_frequency == "Annual") 1 else 0.5)
+    total_cost <- n_visits * ((1 + input$power_nctrl) * input$cost_per_site_visit +
+                                (1 + input$power_nctrl) * input$power_ntran * method_params$Cost_per_Transect)
+    
+    list(mdes = mdes, total_cost = total_cost)
   })
   
-  output$powerCurvePlot <- renderPlot({
-    df <- power_analysis_results()
-    validate(need(nrow(df) > 0, "Click 'Run Power Analysis' to generate results."))
-    
-    plot_data <- df %>%
-      filter(N_Controls %in% as.numeric(input$power_nctrl_selector)) %>%
-      mutate(
-        Control_Sites = factor(paste(N_Controls, "Control Sites")),
-        Baseline_Cover = factor(paste0(Baseline_Cover * 100, "%"))
-      )
-    
-    # --- THE FIX: Create a new summary dataset for the overall trend ---
-    summary_data <- plot_data %>%
-      group_by(Control_Sites, N_Transects) %>%
-      summarise(
-        Power_Mean = mean(Power_Mean),
-        Power_Lower = min(Power_Lower),
-        Power_Upper = max(Power_Upper),
-        .groups = "drop"
-      )
-    
-    point_data <- plot_data %>%
-      filter(N_Controls == input$power_nctrl, N_Transects == input$power_ntran)
-    
-    ggplot(plot_data, aes(x = N_Transects, y = Power_Mean, color = Baseline_Cover, fill = Baseline_Cover)) +
-      geom_ribbon(aes(ymin = Power_Lower, ymax = Power_Upper), alpha = 0.2, linetype = 0) +
-      geom_line(linewidth = 1.2) +
-      
-      # --- THE FIX: Add new layers for the overall summary line and ribbon ---
-      geom_ribbon(data = summary_data, aes(x = N_Transects, y = Power_Mean, ymin = Power_Lower, ymax = Power_Upper), fill = "black", alpha = 0.2, inherit.aes = FALSE) +
-      geom_line(data = summary_data, aes(x = N_Transects,y = Power_Mean), color = "black", linewidth = 1.2, inherit.aes = FALSE) +
-      
-      geom_vline(xintercept = input$power_ntran, linetype = "dotted", color = "gray50") +
-      geom_point(data = point_data, size = 3) +
-      geom_hline(yintercept = 0.8, linetype = "dashed", color = "gray20") +
-      facet_wrap(~Control_Sites) +
-      scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
-      scale_x_continuous(breaks = scales::pretty_breaks()) +
-      scale_color_viridis_d(name = "Baseline Cover") +
-      scale_fill_viridis_d(name = "Baseline Cover") +
-      labs(
-        title = paste("Power to Detect a", input$power_uplift_pct, "% Annual Uplift"),
-        subtitle = paste("Using", input$power_method_selector, "(Overall trend in black)"),
-        x = "Number of Transects per Site",
-        y = "Statistical Power (with 95% CI from 10000 simulations)"
-      ) +
-      theme_minimal(base_size = 14) +
-      theme(legend.position = "bottom")
+  # Render text for the four summary cards
+  output$power_mdes_txt <- renderText({
+    res <- power_card_calcs()
+    if (is.na(res$mdes)) return("N/A")
+    paste0(scales::percent(res$mdes, accuracy = 0.1), " / year")
   })
   
-  # output$power_summary_cards <- renderUI({
-  #   
-  #   res <- tryCatch(power_analysis_results(), error = function(e) NULL)
-  #   validate(need(res, "Click 'Run Power Analysis' to see results."))
-  #   
-  #   # --- THE FIX: Summarize across all selected baselines for the card ---
-  #   power_data <- res %>%
-  #     filter(
-  #       N_Controls == input$power_nctrl, 
-  #       N_Transects == input$power_ntran
-  #     ) %>%
-  #     summarise(
-  #       Power_Mean = mean(Power_Mean),
-  #       Power_Lower = min(Power_Lower),
-  #       Power_Upper = max(Power_Upper)
-  #     )
-  #   
-  #   validate(need(nrow(power_data) > 0, "No results for this specific design. Adjust sliders."))
-  #   
-  #   power_text <- paste0(
-  #     scales::percent(power_data$Power_Mean, 0.1),
-  #     " (", scales::percent(power_data$Power_Lower, 0.1), " - ", scales::percent(power_data$Power_Upper, 0.1), ")"
-  #   )
-  #   theme <- if (power_data$Power_Mean >= 0.8) "success" else "danger"
-  #   
-  #   method_params <- survey_methods_params %>% filter(Method == input$power_method_selector)
-  #   n_visits <- input$power_nyears * (if(input$power_frequency == "Annual") 1 else 0.5)
-  #   total_cost <- n_visits * ( (1 + input$power_nctrl) * input$cost_per_site_visit + (1 + input$power_nctrl) * input$power_ntran * method_params$Cost_per_Transect )
-  #   
-  #   tagList(
-  #     value_box(title = "Selected Uplift", value = paste0(input$power_uplift_pct, "% per year"), showcase = bs_icon("bullseye", size = "200%"), theme_color = "primary"),
-  #     value_box(title = "Chosen Survey Method", value = input$power_method_selector, showcase = bs_icon("camera", size = "200%"), theme_color = "primary"),
-  #     value_box(
-  #       title = "Average Power to Detect",
-  #       value = power_text,
-  #       showcase = bs_icon("check-circle-fill", size = "100%"),
-  #       theme_color = theme
-  #     ),
-  #     value_box(title = "Estimated Total Cost", value = paste0("$", prettyNum(total_cost, big.mark = ",")), showcase = bs_icon("cash-coin", size = "200%"), theme_color = "primary")
-  #   )
-  # })
-  # Tab 2: card texts
+  output$power_total_cost_txt <- renderText({
+    paste0("$", prettyNum(power_card_calcs()$total_cost, big.mark = ","))
+  })
+  
   output$power_uplift_txt <- renderText({
     paste0(input$power_uplift_pct, "% per year")
   })
   
-  output$power_method_txt <- renderText({
-    input$power_method_selector
+  # This eventReactive now only runs the main simulation for the plot
+  power_analysis_results <- eventReactive(input$run_power_analysis, {
+    showNotification("Running power analysis simulation...", type = "message", duration = 5)
+    params <- selected_metric_params()
+    
+    # We now call the standalone function from baci_analysis_functions.R
+    run_power_analysis(
+      target_uplift_pct = req(input$power_uplift_pct),
+      monitoring_years = req(input$power_nyears),
+      monitoring_frequency = req(input$power_frequency),
+      survey_precision_sd = survey_methods_params$SD_Precision[survey_methods_params$Method == req(input$power_method_selector)],
+      peak_spatial_sd = params$spatial,
+      temporal_sd = params$temporal,
+      baseline_cover_pct = 30, # No longer needs multiple baselines
+      n_ctrl_values = as.numeric(req(input$power_nctrl_selector)),
+      n_transect_values = 1:20
+    )
   })
   
+  # We also need to update the power card, as the plot may not have run yet.
   output$power_avg_power_txt <- renderText({
     res <- tryCatch(power_analysis_results(), error = function(e) NULL)
     validate(need(!is.null(res), "Click 'Run Power Analysis'"))
     
     pd <- res %>%
-      dplyr::filter(N_Controls == input$power_nctrl, N_Transects == input$power_ntran) %>%
-      dplyr::summarise(
-        Power_Mean  = mean(Power_Mean),
-        Power_Lower = min(Power_Lower),
-        Power_Upper = max(Power_Upper),
-        .groups = "drop"
-      )
+      filter(N_Controls == input$power_nctrl, N_Transects == input$power_ntran)
+    
     validate(need(nrow(pd) > 0, "Adjust design and re-run"))
     
     paste0(
@@ -641,16 +589,34 @@ server <- function(input, output, session) {
     )
   })
   
-  output$power_total_cost_txt <- renderText({
-    method_params <- survey_methods_params %>%
-      dplyr::filter(Method == input$power_method_selector)
+  # The plot function is simplified to no longer need faceting by baseline
+  output$powerCurvePlot <- renderPlot({
+    df <- power_analysis_results()
+    validate(need(nrow(df) > 0, "Click 'Run' to generate results."))
     
-    n_visits <- input$power_nyears * (if (input$power_frequency == "Annual") 1 else 0.5)
-    total_cost <- n_visits * ( (1 + input$power_nctrl) * input$cost_per_site_visit +
-                                 (1 + input$power_nctrl) * input$power_ntran * method_params$Cost_per_Transect )
-    paste0("$", prettyNum(total_cost, big.mark = ","))
+    plot_data <- df %>%
+      mutate(Control_Sites = factor(paste(N_Controls, "Control Sites")))
+    
+    point_data <- plot_data %>%
+      filter(N_Controls == input$power_nctrl, N_Transects == input$power_ntran)
+    
+    ggplot(plot_data, aes(x = N_Transects, y = Power_Mean)) +
+      geom_ribbon(aes(ymin = Power_Lower, ymax = Power_Upper), fill = "steelblue", alpha = 0.2) +
+      geom_line(color = "steelblue", linewidth = 1.2) +
+      geom_vline(xintercept = input$power_ntran, linetype = "dotted", color = "gray50") +
+      geom_point(data = point_data, size = 3, color = "darkblue") +
+      geom_hline(yintercept = 0.8, linetype = "dashed", color = "black") +
+      facet_wrap(~Control_Sites) +
+      scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
+      scale_x_continuous(breaks = scales::pretty_breaks()) +
+      labs(
+        title = paste("Power to Detect a", input$power_uplift_pct, "% Annual Uplift in", input$power_metric),
+        subtitle = paste("Using", input$power_method_selector),
+        x = "Number of Transects per Site",
+        y = "Statistical Power"
+      ) +
+      theme_minimal(base_size = 14)
   })
-
   
   # --- SERVER LOGIC FOR BACI Simulation Tab ---
   observeEvent(input$sim_nyears, {
