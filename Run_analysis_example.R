@@ -1,5 +1,5 @@
 # run_analysis_example.R
-
+# This script runs a BACI analysis simulation using predefined parameters
 library(dplyr)
 library(tibble)
 library(tidyr)
@@ -54,4 +54,4 @@ cat("---------------------------------\n\n")
 
 cat("--- FIRST 10 ROWS OF RAW SIMULATED DATA ---\n")
 print(head(results$raw_data, 10))
-cat("-------------------------------------------\n")```
+cat("-------------------------------------------\n")
