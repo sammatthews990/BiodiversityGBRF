@@ -77,7 +77,7 @@ ui <- page_navbar(
   title = "Biodiversity Credit Dashboard",
   theme = bs_theme(version = 5, preset = "shiny"),
   # --- CSS: responsive value-box typography + icon sizing ---
-
+  
   
   # --- THE FIX: Replace the old <head> with this new, more robust CSS ---  
   header = tags$head(
@@ -139,9 +139,9 @@ ui <- page_navbar(
     }
   "))
   ),
-
+  
   # -- TAB 1: Model Scenario Explorer -----
-
+  
   tabPanel("Model Scenario Explorer",
            page_sidebar(
              sidebar = sidebar(
@@ -164,19 +164,19 @@ ui <- page_navbar(
                                              choices = levels(modelled_data_with_uplift$Reef_Name), 
                                              multiple = TRUE, selected = levels(modelled_data_with_uplift$Reef_Name)),
                                  checkboxGroupInput("geomorph_selector", "Geomorphic Zone", 
-                                             choices = levels(modelled_data_with_uplift$GeomorphicZone), 
-                                             selected = levels(modelled_data_with_uplift$GeomorphicZone))
+                                                    choices = levels(modelled_data_with_uplift$GeomorphicZone), 
+                                                    selected = levels(modelled_data_with_uplift$GeomorphicZone))
                  ),
                  accordion_panel("Intervention Filters",
                                  checkboxGroupInput("deploy_selector", "Deployment Site", inline = TRUE,
-                                             choices = levels(modelled_data_with_uplift$Deployment_Site_Flag), 
-                                            selected = levels(modelled_data_with_uplift$Deployment_Site_Flag)),
+                                                    choices = levels(modelled_data_with_uplift$Deployment_Site_Flag), 
+                                                    selected = levels(modelled_data_with_uplift$Deployment_Site_Flag)),
                                  checkboxGroupInput("interv_selector", "DHW Scenario",inline = TRUE,
-                                             choices = unique(modelled_data_with_uplift$Intervention), 
-                                            selected = unique(modelled_data_with_uplift$Intervention)),
+                                                    choices = unique(modelled_data_with_uplift$Intervention), 
+                                                    selected = unique(modelled_data_with_uplift$Intervention)),
                                  checkboxGroupInput("volume_selector", "Deployment Volume", inline = TRUE,
-                                             choices = levels(modelled_data_with_uplift$Deployment_Volume), 
-                                              selected = levels(modelled_data_with_uplift$Deployment_Volume))
+                                                    choices = levels(modelled_data_with_uplift$Deployment_Volume), 
+                                                    selected = levels(modelled_data_with_uplift$Deployment_Volume))
                  ),
                  accordion_panel("Time Filter",
                                  sliderInput("year_selector", "Year Range", 
@@ -262,438 +262,558 @@ ui <- page_navbar(
                  )
                )
              ),
-             # UPDATED: Card layout with new titles reflecting ranges
              div(class = "value-box-grid",
                  layout_columns(
                    col_widths = c(3, 3, 3, 3),
-                   value_box(title = "Detectable Uplift Range (at 80% Power)", value = textOutput("power_mdes_txt"), showcase = bs_icon("search-heart")),
+                   # NEW: Value of Information Card
+                   value_box(title = "Most Cost-Effective Next Step", value = textOutput("voi_recommendation_txt"), showcase = bs_icon("lightbulb-fill"), theme_color="success"),
+                   value_box(title = "Detectable Uplift Range", value = textOutput("power_mdes_txt"), showcase = bs_icon("search-heart")),
                    value_box(title = "Power Range for Target", value = textOutput("power_avg_power_txt"), showcase = bs_icon("check-circle-fill")),
-                   value_box(title = "Target Uplift", value = textOutput("power_uplift_txt"), showcase = bs_icon("bullseye"), theme_color = "primary"),
                    value_box(title = "Estimated Total Cost", value = textOutput("power_total_cost_txt"), showcase = bs_icon("cash-coin"), theme_color = "primary")
                  )
              ),
-             # NEW: Side-by-side plot layout
+             # # NEW: Side-by-side plot layout
+             # layout_columns(
+             #   col_widths = c(6, 6),
+             #   card(
+             #     card_header("Plot 1: Power to Detect Target Uplift"),
+             #     plotOutput("powerCurvePlot", height = "500px")
+             #   ),
+             #   card(
+             #     card_header("Plot 2: Minimum Detectable Uplift"),
+             #     plotOutput("mdesCurvePlot", height = "500px")
+             #   )
+             # )
+             # ROW 1: The two main plots
              layout_columns(
                col_widths = c(6, 6),
                card(
                  card_header("Plot 1: Power to Detect Target Uplift"),
-                 plotOutput("powerCurvePlot", height = "500px")
+                 plotOutput("powerCurvePlot", height = "400px")
                ),
                card(
                  card_header("Plot 2: Minimum Detectable Uplift"),
-                 plotOutput("mdesCurvePlot", height = "500px")
+                 plotOutput("mdesCurvePlot", height = "400px")
+               )
+             ),
+             # ROW 2: The new side-by-side analysis plots
+             layout_columns(
+               col_widths = c(6, 6),
+               card(
+                 card_header(
+                   class = "d-flex justify-content-between align-items-center",
+                   "Sensitivity Analysis: Key Drivers of Power",
+                   actionButton("run_analysis_plots", "Run Analyses", class="btn-sm btn-outline-primary", icon=icon("play"))
+                 ),
+                 plotOutput("sensitivityPlot", height="300px")
+               ),
+               card(
+                 card_header("Value of Information: Most Efficient Next Step"),
+                 plotOutput("voiPlot", height="300px")
                )
              )
            )
-  ),
-  
-  # --- TAB 3: BACI Credit Simulator ----
-  tabPanel("BACI Credit Simulator",
-           page_sidebar(
-             sidebar = sidebar(
-               width = "350px", 
-               open = "desktop",
-               tags$h4("Simulation Controls"),
-               selectInput("sim_method", "Survey Method", choices = survey_methods_params$Method),
-               sliderInput("sim_nctrl", "Number of Control Sites", min = 1, max = 10, value = 5, step = 1),
-               sliderInput("sim_ntran", "Number of Transects per Site", min = 1, max = 10, value = 5, step = 1),
-               tags$hr(),
-               sliderInput("sim_nyears", "Monitoring Duration (Years)", min = 5, max = 20, value = 10, step = 1),
-               sliderInput("sim_intervention_year", "Intervention Start Year", min = 1, max = 20, value = 3, step = 1),
-               numericInput("sim_uplift_pct", "True Annual Uplift (%)", value = 5, min = 0, max = 20, step = 1),
-               tags$hr(),
-               selectInput("sim_shock_type", "Exogenous Shock Scenario", choices = c("No Shock", "Cyclonic Impact (All sites)", "Bleaching Event (Variable impact)", "Localized Impact (COTS)")),
-               sliderInput("sim_shock_year", "Shock Event Year", min = 1, max = 20, value = 7, step = 1),
-               sliderInput("sim_shock_magnitude", "Shock Magnitude (% Loss)", min = 0, max = 100, value = 50, step = 5),
-               tags$hr(),
-               numericInput("sim_sd_spatial", "Spatial Patchiness (SD)", value = 0.03, min = 0.01, max = 0.2, step = 0.01),
-               numericInput("sim_sd_temporal", "Residual Temporal SD", value = 0.04, min = 0.01, max = 0.2, step = 0.01),
-               tags$hr(),
-               radioButtons("analysis_method", "Analysis Method", choices = c("Full Bayesian (Stan)", "Fast Approximation (INLA)"), selected = "Fast Approximation (INLA)"),
-               actionButton("run_sim", "Run Analysis", class = "btn-primary w-100", icon = icon("play"))
-             ),
-             layout_columns(
-               col_widths = c(4, 4, 4),
-               value_box(title = "Mean Annual Uplift (Composite)", value = textOutput("uplift_card"), showcase = bs_icon("graph-up-arrow")),
-               value_box(title = "Probability of Uplift (Composite)", value = textOutput("prob_card"), showcase = bs_icon("patch-check-fill")),
-               value_box(title = "Final Credit Score (Composite)", value = textOutput("credit_card"), showcase = bs_icon("award-fill"), theme_color = "success")
-             ),
-             layout_columns(
-               col_widths = c(7, 5),
-               card(
-                 card_header(class = "d-flex justify-content-between align-items-center", "Simulated Metric Trends", selectInput("metric_selector", NULL, choices = c("Composite Index", METRIC_DEFINITIONS$Metric), selected = "Composite Index", width = "250px")),
-                 plotOutput("simulationPlot", height = "400px")
-               ),
-               card(card_header("Detailed Results by Metric"), DTOutput("resultsTable"))
-             )
+           ),
+           
+           # --- TAB 3: BACI Credit Simulator ----
+           tabPanel("BACI Credit Simulator",
+                    page_sidebar(
+                      sidebar = sidebar(
+                        width = "350px", 
+                        open = "desktop",
+                        tags$h4("Simulation Controls"),
+                        selectInput("sim_method", "Survey Method", choices = survey_methods_params$Method),
+                        sliderInput("sim_nctrl", "Number of Control Sites", min = 1, max = 10, value = 5, step = 1),
+                        sliderInput("sim_ntran", "Number of Transects per Site", min = 1, max = 10, value = 5, step = 1),
+                        tags$hr(),
+                        sliderInput("sim_nyears", "Monitoring Duration (Years)", min = 5, max = 20, value = 10, step = 1),
+                        sliderInput("sim_intervention_year", "Intervention Start Year", min = 1, max = 20, value = 3, step = 1),
+                        numericInput("sim_uplift_pct", "True Annual Uplift (%)", value = 5, min = 0, max = 20, step = 1),
+                        tags$hr(),
+                        selectInput("sim_shock_type", "Exogenous Shock Scenario", choices = c("No Shock", "Cyclonic Impact (All sites)", "Bleaching Event (Variable impact)", "Localized Impact (COTS)")),
+                        sliderInput("sim_shock_year", "Shock Event Year", min = 1, max = 20, value = 7, step = 1),
+                        sliderInput("sim_shock_magnitude", "Shock Magnitude (% Loss)", min = 0, max = 100, value = 50, step = 5),
+                        tags$hr(),
+                        numericInput("sim_sd_spatial", "Spatial Patchiness (SD)", value = 0.03, min = 0.01, max = 0.2, step = 0.01),
+                        numericInput("sim_sd_temporal", "Residual Temporal SD", value = 0.04, min = 0.01, max = 0.2, step = 0.01),
+                        tags$hr(),
+                        radioButtons("analysis_method", "Analysis Method", choices = c("Full Bayesian (Stan)", "Fast Approximation (INLA)"), selected = "Fast Approximation (INLA)"),
+                        actionButton("run_sim", "Run Analysis", class = "btn-primary w-100", icon = icon("play"))
+                      ),
+                      layout_columns(
+                        col_widths = c(4, 4, 4),
+                        value_box(title = "Mean Annual Uplift (Composite)", value = textOutput("uplift_card"), showcase = bs_icon("graph-up-arrow")),
+                        value_box(title = "Probability of Uplift (Composite)", value = textOutput("prob_card"), showcase = bs_icon("patch-check-fill")),
+                        value_box(title = "Final Credit Score (Composite)", value = textOutput("credit_card"), showcase = bs_icon("award-fill"), theme_color = "success")
+                      ),
+                      layout_columns(
+                        col_widths = c(7, 5),
+                        card(
+                          card_header(class = "d-flex justify-content-between align-items-center", "Simulated Metric Trends", selectInput("metric_selector", NULL, choices = c("Composite Index", METRIC_DEFINITIONS$Metric), selected = "Composite Index", width = "250px")),
+                          plotOutput("simulationPlot", height = "400px")
+                        ),
+                        card(card_header("Detailed Results by Metric"), DTOutput("resultsTable"))
+                      )
+                    )
            )
   )
-)
+  
+  server <- function(input, output, session) {
+    # --- SERVER LOGIC FOR TAB 1 ----
+    reef_locations <- modelled_data_with_uplift %>% 
+      group_by(Reef_Name) %>% 
+      summarise(lat = first(site_lat), lng = first(site_long), .groups = "drop")
+    
+    output$reefMap <- renderLeaflet({
+      leaflet(reef_locations) %>%
+        addProviderTiles(providers$Esri.WorldImagery) %>%
+        addCircleMarkers(lng = ~lng, lat = ~lat, layerId = ~Reef_Name, label = ~Reef_Name, radius = 8, stroke = FALSE, fillOpacity = 0.8)
+    })
+    
+    observeEvent(input$reefMap_marker_click, {
+      clicked_reef <- input$reefMap_marker_click$id
+      current_selection <- input$reef_selector
+      if (clicked_reef %in% current_selection) { new_selection <- current_selection[current_selection != clicked_reef] } else { new_selection <- c(current_selection, clicked_reef) }
+      updateSelectInput(session, "reef_selector", selected = new_selection)
+    })
+    
+    filtered_model_data <- reactive({
+      req(input$reef_selector, input$geomorph_selector, input$year_selector, input$deploy_selector, input$interv_selector, input$volume_selector)
+      modelled_data_with_uplift %>%
+        filter(
+          Reef_Name %in% input$reef_selector,
+          GeomorphicZone %in% input$geomorph_selector,
+          Deployment_Site_Flag %in% input$deploy_selector,
+          Intervention %in% input$interv_selector,
+          Deployment_Volume %in% input$volume_selector,
+          Year >= input$year_selector[1] & Year <= input$year_selector[2]
+        )
+    })
+    
+    output$timeSeriesPlot <- renderPlot({
+      df <- filtered_model_data()
+      validate(need(nrow(df) > 0, "No data available for the current filter settings."))
+      
+      # Determine which columns to use based on the toggle
+      if (input$plot_display_toggle == "Uplift") {
+        metric_col_name <- paste0("Uplift_", input$explorer_metric)
+        sd_col_name <- paste0("Uplift_", input$explorer_metric, "_sd")
+        y_lab <- paste("Uplift in", gsub("_", " ", input$explorer_metric))
+      } else {
+        metric_col_name <- input$explorer_metric
+        sd_col_name <- paste0(input$explorer_metric, "_sd")
+        y_lab <- gsub("_", " ", input$explorer_metric)
+      }
+      
+      group_col_name <- input$explorer_color_by
+      
+      validate(need(sd_col_name %in% names(df), "SD column for selected metric not found."))
+      
+      df <- df %>% mutate(Grouping_Var = as.factor(.data[[group_col_name]]))
+      
+      plot_data <- df %>%
+        group_by(Year, Grouping_Var) %>%
+        summarise(
+          Mean_Value = mean(.data[[metric_col_name]], na.rm = TRUE),
+          Agg_SD = sqrt(mean(.data[[sd_col_name]]^2, na.rm = TRUE)),
+          .groups = "drop"
+        ) %>%
+        filter(!is.na(Agg_SD)) %>%
+        mutate(
+          Lower_CI = Mean_Value - 1.96 * Agg_SD,
+          Upper_CI = Mean_Value + 1.96 * Agg_SD
+        )
+      
+      ggplot(plot_data, aes(x = Year, y = Mean_Value, color = Grouping_Var, fill = Grouping_Var)) +
+        geom_ribbon(aes(ymin = Lower_CI, ymax = Upper_CI), alpha = 0.2, linetype = 0) +
+        geom_line(linewidth = 1.2) +
+        {if(input$plot_display_toggle == "Uplift") geom_hline(yintercept = 0, linetype = "dashed")} +
+        labs(y = y_lab, x = "Year", color = gsub("_", " ", group_col_name), fill = gsub("_", " ", group_col_name)) +
+        theme_minimal(base_size = 14) +
+        theme(legend.position = "bottom")
+    })
+    
+    # --- NEW: Server logic for the summary cards ---
+    card_data <- reactive({
+      df <- filtered_model_data()
+      validate(need(nrow(df) > 0, "No data to calculate summary."))
+      
+      intervention_df <- df %>% filter(!Deployment_Volume == 0)
+      validate(need(nrow(intervention_df) > 0, "No intervention sites in current filter to calculate uplift."))
+      
+      final_year <- max(intervention_df$Year)
+      intervention_start <- min(intervention_df$Year[intervention_df$Deployment_Site_Flag == 1], na.rm = TRUE)
+      
+      uplift_col_name <- paste0("Uplift_", input$explorer_metric)
+      
+      # Calculate summary stats for BOTH deployment and spillover sites
+      summary <- intervention_df %>%
+        filter(Year == final_year, !is.na(.data[[uplift_col_name]])) %>%
+        group_by(Deployment_Site_Flag) %>%
+        summarise(final_uplift = mean(.data[[uplift_col_name]], na.rm = TRUE), .groups = "drop")
+      
+      annual_uplift_calc <- function(final_uplift) {
+        if (!is.infinite(intervention_start)) {
+          final_uplift / (final_year - intervention_start + 1)
+        } else { NA }
+      }
+      
+      # Extract values for each group
+      deploy_data <- summary %>% filter(Deployment_Site_Flag == 1)
+      spill_data <- summary %>% filter(Deployment_Site_Flag == 0)
+      
+      list(
+        deploy_final = if(nrow(deploy_data) > 0) deploy_data$final_uplift else NA,
+        deploy_annual = if(nrow(deploy_data) > 0) annual_uplift_calc(deploy_data$final_uplift) else NA,
+        spill_final = if(nrow(spill_data) > 0) spill_data$final_uplift else NA,
+        spill_annual = if(nrow(spill_data) > 0) annual_uplift_calc(spill_data$final_uplift) else NA
+      )
+    })
+    
+    # --- Render all four cards ---
+    render_card_text <- function(value, suffix = "") {
+      renderText({
+        data <- card_data()
+        req(data)
+        val <- data[[value]]
+        if (is.na(val)) "N/A" else paste0(scales::percent(val, accuracy = 0.1), suffix)
+      })
+    }
+    
+    output$final_uplift_card_deploy <- render_card_text("deploy_final")
+    output$annual_uplift_card_deploy <- render_card_text("deploy_annual", " / year")
+    output$final_uplift_card_spill <- render_card_text("spill_final")
+    output$annual_uplift_card_spill <- render_card_text("spill_annual", " / year")
+    
+    output$dataTableExplorer <- renderDT({
+      DT::datatable(
+        filtered_model_data(),
+        rownames = FALSE,
+        options = list(pageLength = 10, scrollX = TRUE)
+      )
+    })
+    
+    
+    # --- SERVER LOGIC FOR TAB 2: Power Analysis ----
+    
+    # --- SERVER LOGIC FOR TAB 2: Power Analysis ----
+    
+    # This observeEvent ONLY updates the SD inputs when the metric changes.
+    observeEvent(input$power_metric, {
+      # ... (this logic is unchanged) ...
+      metric_name <- req(input$power_metric)
+      if (metric_name == "Composite Index (RCI)") {
+        params <- METRIC_DEFINITIONS %>% summarise(Spatial_SD = sqrt(mean(Spatial_SD^2)), Temporal_SD = sqrt(mean(Temporal_SD^2)))
+      } else {
+        params <- METRIC_DEFINITIONS %>% filter(Metric == metric_name)
+      }
+      updateNumericInput(session, "power_sd_spatial", value = round(params$Spatial_SD, 3))
+      updateNumericInput(session, "power_sd_temporal", value = round(params$Temporal_SD, 3))
+    })
+    
+    # Reactive that defines the three heterogeneity scenarios based on USER INPUTS
+    heterogeneity_scenarios <- reactive({
+      # ... (this logic is unchanged) ...
+      req(input$power_sd_spatial, input$power_sd_spatial_var_pct)
+      central_sd <- input$power_sd_spatial
+      variation_pct <- input$power_sd_spatial_var_pct / 100
+      tibble(
+        Scenario = factor(c("Low Heterogeneity", "Medium (Central)", "High Heterogeneity"), levels = c("Low Heterogeneity", "Medium (Central)", "High Heterogeneity")),
+        spatial_sd_val = c(central_sd * (1 - variation_pct), central_sd, central_sd * (1 + variation_pct))
+      )
+    })
+    
+    # --- START OF THE FIX ---
+    # THIS REACTIVE WAS MISSING. It provides the correct survey precision based on the selected metric.
+    selected_survey_precision <- reactive({
+      metric_info <- METRIC_DEFINITIONS %>% filter(Metric == req(input$power_metric))
+      metric_type <- if(nrow(metric_info) > 0) metric_info$Metric_Type else "Composite"
+      
+      benthic_prec <- benthic_survey_params$SD_Precision[benthic_survey_params$Method == req(input$power_method_benthic)]
+      fish_prec <- fish_survey_params$SD_Precision[fish_survey_params$Method == req(input$power_method_fish)]
+      
+      if (metric_type == "Benthic") return(benthic_prec)
+      else if (metric_type == "Fish") return(fish_prec)
+      else return(sqrt(mean(c(benthic_prec^2, fish_prec^2))))
+    })
+    # --- END OF THE FIX ---
+    
+    # Main reactive to run the analysis; triggered by the "Run Power Analysis" button
+    power_analysis_results <- eventReactive(input$run_power_analysis, {
+      # ... (this logic is unchanged) ...
+      showNotification("Running power analysis...", type = "message", duration = 5)
+      benthic_prec <- benthic_survey_params$SD_Precision[benthic_survey_params$Method == req(input$power_method_benthic)]
+      fish_prec <- fish_survey_params$SD_Precision[fish_survey_params$Method == req(input$power_method_fish)]
+      scenarios_df <- heterogeneity_scenarios()
+      results <- scenarios_df %>%
+        mutate(analysis = map(spatial_sd_val, ~ {
+          metric_info <- METRIC_DEFINITIONS %>% filter(Metric == req(input$power_metric))
+          metric_type <- if(nrow(metric_info) > 0) metric_info$Metric_Type else "Composite"
+          sd_precision <- if (metric_type == "Benthic") benthic_prec else if (metric_type == "Fish") fish_prec else sqrt(mean(c(benthic_prec^2, fish_prec^2)))
+          run_power_analysis(
+            target_uplift_pct = req(input$power_uplift_pct),
+            monitoring_years = req(input$power_nyears),
+            monitoring_frequency = "Annual",
+            survey_precision_sd = sd_precision,
+            peak_spatial_sd = .x,
+            temporal_sd = req(input$power_sd_temporal),
+            n_ctrl_sites = req(input$power_nctrl)
+          )
+        })) %>%
+        select(-spatial_sd_val) %>% unnest(analysis)
+      return(results)
+    })
+    
+    # Reactive for calculating the card values from the results
+    card_summary <- reactive({
+      # ... (this logic is unchanged) ...
+      res <- tryCatch(power_analysis_results(), error = function(e) return(NULL)); req(res)
+      summary <- res %>% filter(N_Transects == req(input$power_ntran)); req(nrow(summary) == 3)
+      low_het <- summary %>% filter(Scenario == "Low Heterogeneity")
+      mid_het <- summary %>% filter(Scenario == "Medium (Central)")
+      high_het <- summary %>% filter(Scenario == "High Heterogeneity")
+      power_display_range <- c(high_het$Power_Lower, low_het$Power_Upper)
+      mdes_display_range <- c(low_het$MDES, high_het$MDES)
+      list(power_mid = mid_het$Power_Mean, power_range = power_display_range, mdes_mid = mid_het$MDES, mdes_range = mdes_display_range)
+    })
+    
+    # Render text for the cards with ranges
+    output$power_mdes_txt <- renderText({
+      vals <- tryCatch(card_summary(), error = function(e) NULL); req(vals)
+      sprintf("%.1f%% (%.1f%% – %.1f%%)", vals$mdes_mid*100, vals$mdes_range[1]*100, vals$mdes_range[2]*100)
+    })
+    output$power_avg_power_txt <- renderText({
+      vals <- tryCatch(card_summary(), error = function(e) NULL); req(vals)
+      sprintf("%.1f%% (%.1f%% – %.1f%%)", vals$power_mid*100, vals$power_range[1]*100, vals$power_range[2]*100)
+    })
+    output$power_uplift_txt <- renderText({ paste0(input$power_uplift_pct, "% per year") })
+    output$power_total_cost_txt <- renderText({
+      # ... (this logic is unchanged) ...
+      req(input$power_method_benthic, input$power_method_fish, input$power_nctrl, input$power_ntran, input$power_nyears)
+      benthic_cost <- benthic_survey_params$Cost_per_Transect[benthic_survey_params$Method == input$power_method_benthic]
+      fish_cost <- fish_survey_params$Cost_per_Transect[fish_survey_params$Method == input$power_method_fish]
+      total_transect_cost <- benthic_cost + fish_cost
+      n_visits <- input$power_nyears
+      total_cost <- n_visits * ((1 + input$power_nctrl) * input$cost_per_site_visit + (1 + input$power_nctrl) * input$power_ntran * total_transect_cost)
+      paste0("$", prettyNum(total_cost, big.mark = ","))
+    })
 
-server <- function(input, output, session) {
-  # --- SERVER LOGIC FOR TAB 1 ----
-  reef_locations <- modelled_data_with_uplift %>% 
-    group_by(Reef_Name) %>% 
-    summarise(lat = first(site_lat), lng = first(site_long), .groups = "drop")
-  
-  output$reefMap <- renderLeaflet({
-    leaflet(reef_locations) %>%
-      addProviderTiles(providers$Esri.WorldImagery) %>%
-      addCircleMarkers(lng = ~lng, lat = ~lat, layerId = ~Reef_Name, label = ~Reef_Name, radius = 8, stroke = FALSE, fillOpacity = 0.8)
-  })
-  
-  observeEvent(input$reefMap_marker_click, {
-    clicked_reef <- input$reefMap_marker_click$id
-    current_selection <- input$reef_selector
-    if (clicked_reef %in% current_selection) { new_selection <- current_selection[current_selection != clicked_reef] } else { new_selection <- c(current_selection, clicked_reef) }
-    updateSelectInput(session, "reef_selector", selected = new_selection)
-  })
-  
-  filtered_model_data <- reactive({
-    req(input$reef_selector, input$geomorph_selector, input$year_selector, input$deploy_selector, input$interv_selector, input$volume_selector)
-    modelled_data_with_uplift %>%
-      filter(
-        Reef_Name %in% input$reef_selector,
-        GeomorphicZone %in% input$geomorph_selector,
-        Deployment_Site_Flag %in% input$deploy_selector,
-        Intervention %in% input$interv_selector,
-        Deployment_Volume %in% input$volume_selector,
-        Year >= input$year_selector[1] & Year <= input$year_selector[2]
+    # NEW: A single reactive that drives BOTH bottom plots, triggered by one button.
+    analysis_plot_data <- eventReactive(input$run_analysis_plots, {
+      showNotification("Running VoI and sensitivity analyses...", type="message", duration=8)
+      
+      # ======== 1. SENSITIVITY ANALYSIS CALCULATION ========
+      OAT_parameter_range_pct <- 0.20
+      p_base <- list(
+        n_sites = input$power_nctrl, n_tran = input$power_ntran, sd_spat = input$power_sd_spatial,
+        sd_temp = input$power_sd_temporal, sd_prec = selected_survey_precision()
       )
-  })
-  
-  output$timeSeriesPlot <- renderPlot({
-    df <- filtered_model_data()
-    validate(need(nrow(df) > 0, "No data available for the current filter settings."))
-    
-    # Determine which columns to use based on the toggle
-    if (input$plot_display_toggle == "Uplift") {
-      metric_col_name <- paste0("Uplift_", input$explorer_metric)
-      sd_col_name <- paste0("Uplift_", input$explorer_metric, "_sd")
-      y_lab <- paste("Uplift in", gsub("_", " ", input$explorer_metric))
-    } else {
-      metric_col_name <- input$explorer_metric
-      sd_col_name <- paste0(input$explorer_metric, "_sd")
-      y_lab <- gsub("_", " ", input$explorer_metric)
-    }
-    
-    group_col_name <- input$explorer_color_by
-    
-    validate(need(sd_col_name %in% names(df), "SD column for selected metric not found."))
-    
-    df <- df %>% mutate(Grouping_Var = as.factor(.data[[group_col_name]]))
-    
-    plot_data <- df %>%
-      group_by(Year, Grouping_Var) %>%
-      summarise(
-        Mean_Value = mean(.data[[metric_col_name]], na.rm = TRUE),
-        Agg_SD = sqrt(mean(.data[[sd_col_name]]^2, na.rm = TRUE)),
-        .groups = "drop"
-      ) %>%
-      filter(!is.na(Agg_SD)) %>%
-      mutate(
-        Lower_CI = Mean_Value - 1.96 * Agg_SD,
-        Upper_CI = Mean_Value + 1.96 * Agg_SD
+      sens_scenarios <- tribble(
+        ~Parameter, ~Low, ~High,
+        "N Control Sites", floor(p_base$n_sites * (1-OAT_parameter_range_pct)), ceiling(p_base$n_sites * (1+OAT_parameter_range_pct)),
+        "N Transects/Site", floor(p_base$n_tran * (1-OAT_parameter_range_pct)), ceiling(p_base$n_tran * (1+OAT_parameter_range_pct)),
+        "Spatial SD", p_base$sd_spat * (1-OAT_parameter_range_pct), p_base$sd_spat * (1+OAT_parameter_range_pct),
+        "Temporal SD", p_base$sd_temp * (1-OAT_parameter_range_pct), p_base$sd_temp * (1+OAT_parameter_range_pct),
+        "Survey Precision", p_base$sd_prec * (1-OAT_parameter_range_pct), p_base$sd_prec * (1+OAT_parameter_range_pct)
       )
+      run_sens_scenario <- function(Parameter, Low, High) {
+        p_low <- p_base; p_high <- p_base
+        if(Parameter == "N Control Sites") { p_low$n_sites <- Low; p_high$n_sites <- High }
+        if(Parameter == "N Transects/Site") { p_low$n_tran <- Low; p_high$n_tran <- High }
+        # ... (rest of the conditions are the same)
+        if(Parameter == "Spatial SD") { p_low$sd_spat <- Low; p_high$sd_spat <- High }
+        if(Parameter == "Temporal SD") { p_low$sd_temp <- Low; p_high$sd_temp <- High }
+        if(Parameter == "Survey Precision") { p_low$sd_prec <- Low; p_high$sd_prec <- High }
+        power_low <- run_power_analysis(n_ctrl_sites=p_low$n_sites, n_transect_values=p_low$n_tran, peak_spatial_sd=p_low$sd_spat, temporal_sd=p_low$sd_temp, survey_precision_sd=p_low$sd_prec, target_uplift_pct=input$power_uplift_pct, monitoring_years=input$power_nyears, monitoring_frequency="Annual")$Power_Mean
+        power_high <- run_power_analysis(n_ctrl_sites=p_high$n_sites, n_transect_values=p_high$n_tran, peak_spatial_sd=p_high$sd_spat, temporal_sd=p_high$sd_temp, survey_precision_sd=p_high$sd_prec, target_uplift_pct=input$power_uplift_pct, monitoring_years=input$power_nyears, monitoring_frequency="Annual")$Power_Mean
+        tibble(Parameter=Parameter, Power_Low=power_low, Power_High=power_high)
+      }
+      sensitivity_df <- purrr::pmap_dfr(sens_scenarios, run_sens_scenario) %>%
+        mutate(Swing = Power_High - Power_Low)
+      
+      # ======== 2. VALUE OF INFORMATION CALCULATION ========
+      # A. Pre-calculate power curve for the BASE number of sites (efficient)
+      power_curve_base <- run_power_analysis(
+        n_ctrl_sites = input$power_nctrl,
+        peak_spatial_sd = input$power_sd_spatial,
+        # ... other params
+        temporal_sd = input$power_sd_temporal, survey_precision_sd = selected_survey_precision(),
+        target_uplift_pct = input$power_uplift_pct, monitoring_years = input$power_nyears, monitoring_frequency = "Annual",
+        n_transect_values = 1:21 # Go one beyond max for lead() function
+      )
+      
+      # B. Loop through each transect number to calculate the two efficiencies
+      voi_calcs <- purrr::map_dfr(1:20, function(n_tran) {
+        # Get current power and power of adding a transect using the pre-calculated curve
+        current_power <- power_curve_base$Power_Mean[power_curve_base$N_Transects == n_tran]
+        power_add_transect <- dplyr::lead(power_curve_base$Power_Mean)[power_curve_base$N_Transects == n_tran]
+        
+        # Calculate power of adding a site (this requires a new simulation)
+        power_add_site <- run_power_analysis(
+          n_ctrl_sites = input$power_nctrl + 1,
+          n_transect_values = n_tran,
+          # ... other params
+          peak_spatial_sd = input$power_sd_spatial, temporal_sd = input$power_sd_temporal, 
+          survey_precision_sd = selected_survey_precision(), target_uplift_pct = input$power_uplift_pct, 
+          monitoring_years = input$power_nyears, monitoring_frequency = "Annual"
+        )$Power_Mean
+        
+        # Costs
+        benthic_cost <- benthic_survey_params$Cost_per_Transect[benthic_survey_params$Method == req(input$power_method_benthic)]
+        fish_cost <- fish_survey_params$Cost_per_Transect[fish_survey_params$Method == req(input$power_method_fish)]
+        cost_add_transect <- (1 + input$power_nctrl) * (benthic_cost + fish_cost) * input$power_nyears
+        cost_add_site <- (input$cost_per_site_visit + (n_tran * (benthic_cost + fish_cost))) * input$power_nyears
+        
+        tibble(
+          N_Transects = n_tran,
+          Efficiency_Add_Transect = (power_add_transect - current_power) / (cost_add_transect / 1000),
+          Efficiency_Add_Site = (power_add_site - current_power) / (cost_add_site / 1000)
+        )
+      })
+      
+      # Pivot for easy plotting
+      voi_df <- voi_calcs %>% 
+        pivot_longer(
+          cols = starts_with("Efficiency"),
+          names_to = "Action",
+          values_to = "Efficiency",
+          names_prefix = "Efficiency_"
+        ) %>%
+        mutate(Action = gsub("_", " ", Action))
+      
+      # Return both dataframes in a list
+      list(sensitivity = sensitivity_df, voi = voi_df)
+    })
     
-    ggplot(plot_data, aes(x = Year, y = Mean_Value, color = Grouping_Var, fill = Grouping_Var)) +
-      geom_ribbon(aes(ymin = Lower_CI, ymax = Upper_CI), alpha = 0.2, linetype = 0) +
-      geom_line(linewidth = 1.2) +
-      {if(input$plot_display_toggle == "Uplift") geom_hline(yintercept = 0, linetype = "dashed")} +
-      labs(y = y_lab, x = "Year", color = gsub("_", " ", group_col_name), fill = gsub("_", " ", group_col_name)) +
-      theme_minimal(base_size = 14) +
-      theme(legend.position = "bottom")
-  })
-  
-  # --- NEW: Server logic for the summary cards ---
-  card_data <- reactive({
-    df <- filtered_model_data()
-    validate(need(nrow(df) > 0, "No data to calculate summary."))
+    # Render the Sensitivity (Tornado) Plot
+    output$sensitivityPlot <- renderPlot({
+      df <- analysis_plot_data()$sensitivity
+      validate(need(nrow(df) > 0, "Click 'Run Analyses' to generate plot."))
+      
+      ggplot(df, aes(x = reorder(Parameter, Swing), ymin = Power_Low, ymax = Power_High)) +
+        geom_linerange(size = 8, color = "skyblue") +
+        coord_flip() +
+        scale_y_continuous(labels = scales::percent) +
+        labs(x = NULL, y = "Range of Statistical Power",
+             subtitle = "Impact of a ±20% change in each parameter.") +
+        theme_minimal(base_size = 14)
+    })
     
-    intervention_df <- df %>% filter(!Deployment_Volume == 0)
-    validate(need(nrow(intervention_df) > 0, "No intervention sites in current filter to calculate uplift."))
+    # Render the new Value of Information Plot
+    output$voiPlot <- renderPlot({
+      df <- analysis_plot_data()$voi
+      validate(need(nrow(df) > 0, "Click 'Run Analyses' to generate plot."))
+      
+      ggplot(df, aes(x = N_Transects, y = Efficiency, color = Action)) +
+        geom_line(linewidth = 1.2) +
+        geom_vline(xintercept = input$power_ntran, linetype = "dotted", color = "black") +
+        scale_y_continuous(limits = c(0, NA)) +
+        scale_color_manual(values = c("Add a Site" = "#d95f02", "Add a Transect" = "#1b9e77")) +
+        labs(x = "Number of Transects per Site", y = "Power Gain per $1000", color = "Action",
+             subtitle = "Curve shows the most cost-effective investment.") +
+        theme_minimal(base_size = 14) +
+        theme(legend.position = "bottom")
+    })
     
-    final_year <- max(intervention_df$Year)
-    intervention_start <- min(intervention_df$Year[intervention_df$Deployment_Site_Flag == 1], na.rm = TRUE)
+    # Update the VoI recommendation card based on the plot data
+    output$voi_recommendation_txt <- renderText({
+      df <- tryCatch(analysis_plot_data()$voi, error = function(e) return(NULL))
+      req(df)
+      
+      rec_data <- df %>% 
+        filter(N_Transects == input$power_ntran) %>%
+        top_n(1, Efficiency)
+      
+      req(nrow(rec_data) > 0)
+      rec_data$Action
+    })
     
-    uplift_col_name <- paste0("Uplift_", input$explorer_metric)
+    # Plot 1 & 2 (Power Curve and MDES Curve)
+    # ... (these two renderPlot functions are unchanged) ...
+    output$powerCurvePlot <- renderPlot({
+      df <- power_analysis_results(); validate(need(nrow(df) > 0, "Click 'Run Power Analysis' to generate plots."))
+      point_data <- df %>% filter(N_Transects == input$power_ntran)
+      ggplot(df, aes(x = N_Transects, y = Power_Mean, color = Scenario, fill = Scenario)) +
+        geom_ribbon(aes(ymin = Power_Lower, ymax = Power_Upper), alpha = 0.2, linetype = 0) +
+        geom_line(linewidth = 1.1) + geom_hline(yintercept = 0.8, linetype = "dashed", color = "black") +
+        geom_vline(xintercept = input$power_ntran, linetype = "dotted") + geom_point(data = point_data, size = 3) +
+        scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
+        scale_color_viridis_d(guide = "none") + scale_fill_viridis_d(guide = "none") +
+        # facet_wrap(~Scenario) +
+        labs(subtitle = paste("Based on", input$power_nctrl, "Control Sites"), x = "Number of Transects", y = "Statistical Power") +
+        theme_minimal(base_size = 14)
+    })
+    output$mdesCurvePlot <- renderPlot({
+      df <- power_analysis_results(); validate(need(nrow(df) > 0, "Click 'Run Power Analysis' to generate plots."))
+      point_data <- df %>% filter(N_Transects == input$power_ntran)
+      ggplot(df, aes(x = N_Transects, y = MDES, color = Scenario, fill = Scenario)) +
+        geom_line(linewidth = 1.1) +
+        geom_hline(yintercept = input$power_uplift_pct / 100, linetype = "dashed", color = "black") +
+        annotate("text", x=max(df$N_Transects), y=input$power_uplift_pct / 100, label="Target Uplift", vjust=-0.5, hjust=1, color="black") +
+        geom_vline(xintercept = input$power_ntran, linetype = "dotted") + geom_point(data = point_data, size = 3) +
+        scale_y_continuous(labels = scales::percent, limits=c(0, NA)) +
+        scale_color_viridis_d() + scale_fill_viridis_d() +
+        # facet_wrap(~Scenario) +
+        labs(subtitle = paste("Based on", input$power_nctrl, "Control Sites"), x = "Number of Transects", y = "Detectable Uplift (at 80% Power)") +
+        theme_minimal(base_size = 14) + theme(legend.position = "right")
+    })
     
-    # Calculate summary stats for BOTH deployment and spillover sites
-    summary <- intervention_df %>%
-      filter(Year == final_year, !is.na(.data[[uplift_col_name]])) %>%
-      group_by(Deployment_Site_Flag) %>%
-      summarise(final_uplift = mean(.data[[uplift_col_name]], na.rm = TRUE), .groups = "drop")
+    # --- SERVER LOGIC FOR BACI Simulation Tab ----
+    observeEvent(input$sim_nyears, {
+      nyears <- input$sim_nyears
+      updateSliderInput(session, "sim_intervention_year", max = nyears, value = min(input$sim_intervention_year, nyears))
+      updateSliderInput(session, "sim_shock_year", max = nyears, value = min(input$sim_shock_year, nyears))
+    })
+    analysis_results <- eventReactive(input$run_sim, {
+      msg <- if(input$analysis_method == "Full Bayesian (Stan)") "Running full Bayesian simulation... this will be slow." else "Running fast approximation..."
+      showNotification(msg, type = "message", duration = 10)
+      method_params <- survey_methods_params %>% filter(Method == input$sim_method)
+      sd_precision <- method_params$SD_Precision
+      run_baci_analysis(analysis_method = input$analysis_method, n_sites_ctrl = input$sim_nctrl, n_transects = input$sim_ntran, n_years = input$sim_nyears, intervention_year = input$sim_intervention_year, true_uplift_pct = input$sim_uplift_pct, shock_type = input$sim_shock_type, shock_year = input$sim_shock_year, shock_magnitude_pct = input$sim_shock_magnitude, survey_precision_sd = sd_precision, spatial_patchiness_sd = input$sim_sd_spatial, temporal_variation_sd = input$sim_sd_temporal)
+    })
     
-    annual_uplift_calc <- function(final_uplift) {
-      if (!is.infinite(intervention_start)) {
-        final_uplift / (final_year - intervention_start + 1)
-      } else { NA }
-    }
+    output$uplift_card <- renderText({ req(analysis_results()); paste0(round(analysis_results()$composite_uplift * 100, 2), "%") })
+    output$prob_card <- renderText({ req(analysis_results()); scales::percent(analysis_results()$composite_prob, accuracy = 0.1) })
+    output$credit_card <- renderText({ req(analysis_results()); round(analysis_results()$composite_credit * 100, 1) })
     
-    # Extract values for each group
-    deploy_data <- summary %>% filter(Deployment_Site_Flag == 1)
-    spill_data <- summary %>% filter(Deployment_Site_Flag == 0)
+    output$simulationPlot <- renderPlot({
+      req(input$metric_selector); plot_data <- analysis_results()$plot_data %>% filter(Metric == input$metric_selector)
+      y_label <- if (input$metric_selector == "Composite Index") "Reef Condition Index (Normalized)" else input$metric_selector
+      y_limits <- if (input$metric_selector == "Composite Index") c(0.5, 1.5) else c(0, 1)
+      y_formatter <- if (input$metric_selector == "Composite Index") scales::number_format(accuracy = 0.1) else scales::percent
+      p <- ggplot(plot_data, aes(x = Year, y = Mean, color = Site_Type, fill = Site_Type)) +
+        geom_vline(xintercept = input$sim_intervention_year, linetype = "dashed", color = "blue", linewidth = 1) +
+        geom_ribbon(aes(ymin = Lower_CI, ymax = Upper_CI), alpha = 0.2, linetype = 0) +
+        geom_line(linewidth = 1.2) +
+        annotate("text", x = input$sim_intervention_year, y = y_limits[2], label = "Intervention", color = "blue", hjust = -0.1, vjust = 1) +
+        coord_cartesian(ylim = y_limits, expand = FALSE) + scale_y_continuous(labels = y_formatter, name = y_label) +
+        scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "gray40")) + scale_fill_manual(values = c("Treatment" = "darkorange", "Control" = "gray40")) +
+        labs(title = paste("Simulated Trend for:", input$metric_selector), subtitle = paste("Design:", input$sim_nctrl, "Control Sites,", input$sim_ntran, "Transects/Site,", "using", input$sim_method), color = "Site Type", fill = "Site Type") +
+        theme_minimal(base_size = 14) + theme(legend.position = "bottom")
+      if (input$sim_shock_type != "No Shock") { p <- p + geom_vline(xintercept = input$sim_shock_year, linetype = "dashed", color = "red", linewidth = 1) + annotate("text", x = input$sim_shock_year, y = y_limits[2] * 0.95, label = "Shock Event", color = "red", hjust = -0.1, vjust = 1) }
+      p
+    })
     
-    list(
-      deploy_final = if(nrow(deploy_data) > 0) deploy_data$final_uplift else NA,
-      deploy_annual = if(nrow(deploy_data) > 0) annual_uplift_calc(deploy_data$final_uplift) else NA,
-      spill_final = if(nrow(spill_data) > 0) spill_data$final_uplift else NA,
-      spill_annual = if(nrow(spill_data) > 0) annual_uplift_calc(spill_data$final_uplift) else NA
-    )
-  })
-  
-  # --- Render all four cards ---
-  render_card_text <- function(value, suffix = "") {
-    renderText({
-      data <- card_data()
-      req(data)
-      val <- data[[value]]
-      if (is.na(val)) "N/A" else paste0(scales::percent(val, accuracy = 0.1), suffix)
+    output$resultsTable <- renderDT({
+      results_data <- analysis_results()$results_table
+      results_data <- results_data %>% mutate(Uplift_CI = paste0(round(Uplift_CI_Lower * 100, 1), "% to ", round(Uplift_CI_Upper * 100, 1), "%")) %>% select(Metric, Mean_Uplift, Uplift_CI, Prob_Real_Uplift, Credit_Score)
+      DT::datatable(results_data, rownames = FALSE, colnames = c("Metric", "Mean Annual Uplift", "95% CI of Uplift", "Probability of Uplift", "Credit Score"), options = list(dom = 't', pageLength = 10, scrollX = TRUE)) %>% formatPercentage(c("Mean_Uplift", "Prob_Real_Uplift"), digits = 1) %>% formatRound("Credit_Score", digits = 2)
+    })
+    
+    output$simulatedDataTable <- renderDT({
+      req(analysis_results()); raw_data <- analysis_results()$raw_data
+      DT::datatable(raw_data, filter = 'top', rownames = FALSE, options = list(pageLength = 10, scrollX = TRUE)) %>% formatPercentage(c("True_Value", "Observed_Value"), digits = 1)
+    })
+    
+    
+    
+    output$dataTableExplorer <- renderDT({
+      DT::datatable(
+        filtered_model_data(),
+        rownames = FALSE,
+        options = list(pageLength = 10, scrollX = TRUE)
+      )
     })
   }
   
-  output$final_uplift_card_deploy <- render_card_text("deploy_final")
-  output$annual_uplift_card_deploy <- render_card_text("deploy_annual", " / year")
-  output$final_uplift_card_spill <- render_card_text("spill_final")
-  output$annual_uplift_card_spill <- render_card_text("spill_annual", " / year")
-  
-  output$dataTableExplorer <- renderDT({
-    DT::datatable(
-      filtered_model_data(),
-      rownames = FALSE,
-      options = list(pageLength = 10, scrollX = TRUE)
-    )
-  })
-
-  
-  # --- SERVER LOGIC FOR TAB 2: Power Analysis ----
-  
-  # --- SERVER LOGIC FOR TAB 2: Power Analysis ----
-  
-  # This observeEvent ONLY updates the SD inputs when the metric changes.
-  observeEvent(input$power_metric, {
-    metric_name <- req(input$power_metric)
-    
-    if (metric_name == "Composite Index (RCI)") {
-      params <- METRIC_DEFINITIONS %>% summarise(
-        Spatial_SD = sqrt(mean(Spatial_SD^2)),
-        Temporal_SD = sqrt(mean(Temporal_SD^2))
-      )
-    } else {
-      params <- METRIC_DEFINITIONS %>% filter(Metric == metric_name)
-    }
-    updateNumericInput(session, "power_sd_spatial", value = round(params$Spatial_SD, 3))
-    updateNumericInput(session, "power_sd_temporal", value = round(params$Temporal_SD, 3))
-  })
-  
-  # Reactive that defines the three heterogeneity scenarios based on USER INPUTS
-  heterogeneity_scenarios <- reactive({
-    req(input$power_sd_spatial, input$power_sd_spatial_var_pct)
-    central_sd <- input$power_sd_spatial
-    variation_pct <- input$power_sd_spatial_var_pct / 100
-    
-    tibble(
-      Scenario = factor(c("Low Heterogeneity", "Medium (Central)", "High Heterogeneity"), 
-                        levels = c("Low Heterogeneity", "Medium (Central)", "High Heterogeneity")),
-      spatial_sd_val = c(
-        central_sd * (1 - variation_pct),
-        central_sd,
-        central_sd * (1 + variation_pct)
-      )
-    )
-  })
-  
-  # Main reactive to run the analysis; triggered by the button
-  power_analysis_results <- eventReactive(input$run_power_analysis, {
-    showNotification("Running power analysis for all scenarios...", type = "message", duration = 5)
-    
-    benthic_prec <- benthic_survey_params$SD_Precision[benthic_survey_params$Method == req(input$power_method_benthic)]
-    fish_prec <- fish_survey_params$SD_Precision[fish_survey_params$Method == req(input$power_method_fish)]
-    scenarios_df <- heterogeneity_scenarios()
-    
-    results <- scenarios_df %>%
-      mutate(
-        analysis = map(spatial_sd_val, ~ {
-          metric_info <- METRIC_DEFINITIONS %>% filter(Metric == req(input$power_metric))
-          metric_type <- if(nrow(metric_info) > 0) metric_info$Metric_Type else "Composite"
-          
-          sd_precision <- if (metric_type == "Benthic") benthic_prec 
-          else if (metric_type == "Fish") fish_prec 
-          else sqrt(mean(c(benthic_prec^2, fish_prec^2)))
-          
-          run_power_analysis(
-            target_uplift_pct   = req(input$power_uplift_pct),
-            monitoring_years    = req(input$power_nyears),
-            monitoring_frequency= "Annual",
-            survey_precision_sd = sd_precision,
-            peak_spatial_sd     = .x,
-            temporal_sd         = req(input$power_sd_temporal),
-            n_ctrl_sites        = req(input$power_nctrl)
-          )
-        })
-      ) %>%
-      select(-spatial_sd_val) %>%
-      unnest(analysis)
-    
-    return(results)
-  })
-  
-  # UPDATED: Reactive for calculating card values now provides central point and range
-  card_summary <- reactive({
-    res <- tryCatch(power_analysis_results(), error = function(e) return(NULL))
-    req(res)
-    
-    summary <- res %>% filter(N_Transects == req(input$power_ntran))
-    req(nrow(summary) == 3)
-    
-    # Get values for each scenario
-    low_het <- summary %>% filter(Scenario == "Low Heterogeneity")
-    mid_het <- summary %>% filter(Scenario == "Medium (Central)")
-    high_het <- summary %>% filter(Scenario == "High Heterogeneity")
-    
-    # The display range is from the bottom of the worst case to the top of the best case
-    power_display_range <- c(high_het$Power_Lower, low_het$Power_Upper)
-    mdes_display_range <- c(low_het$MDES, high_het$MDES)
-    
-    list(
-      power_mid = mid_het$Power_Mean,
-      power_range = power_display_range,
-      mdes_mid = mid_het$MDES,
-      mdes_range = mdes_display_range
-    )
-  })
-  
-  # TWEAK 1: Render text for cards in the new format "X% (A% - Y%)"
-  output$power_mdes_txt <- renderText({
-    vals <- tryCatch(card_summary(), error = function(e) NULL); req(vals)
-    sprintf("%.1f%% (%.1f%% – %.1f%%)", 
-            vals$mdes_mid * 100, 
-            vals$mdes_range[1] * 100, 
-            vals$mdes_range[2] * 100)
-  })
-  
-  output$power_avg_power_txt <- renderText({
-    vals <- tryCatch(card_summary(), error = function(e) NULL); req(vals)
-    sprintf("%.1f%% (%.1f%% – %.1f%%)", 
-            vals$power_mid * 100, 
-            vals$power_range[1] * 100, 
-            vals$power_range[2] * 100)
-  })
-  
-  output$power_uplift_txt <- renderText({ paste0(input$power_uplift_pct, "% per year") })
-  
-  # TWEAK 2: Fixed cost calculation by removing dependency on non-existent input
-  output$power_total_cost_txt <- renderText({
-    req(input$power_method_benthic, input$power_method_fish, input$power_nctrl, input$power_ntran, input$power_nyears)
-    
-    benthic_cost <- benthic_survey_params$Cost_per_Transect[benthic_survey_params$Method == input$power_method_benthic]
-    fish_cost <- fish_survey_params$Cost_per_Transect[fish_survey_params$Method == input$power_method_fish]
-    total_transect_cost <- benthic_cost + fish_cost
-    
-    # The 'if' statement was removed, as frequency is now fixed to Annual for simplicity
-    n_visits <- input$power_nyears
-    
-    total_cost <- n_visits * ((1 + input$power_nctrl) * input$cost_per_site_visit + (1 + input$power_nctrl) * input$power_ntran * total_transect_cost)
-    paste0("$", prettyNum(total_cost, big.mark = ","))
-  })
-  
-  # Plot 1: Power Curve (no changes needed here)
-  output$powerCurvePlot <- renderPlot({
-    df <- power_analysis_results()
-    validate(need(nrow(df) > 0, "Click 'Run Power Analysis' to generate plots."))
-    point_data <- df %>% filter(N_Transects == input$power_ntran)
-    ggplot(df, aes(x = N_Transects, y = Power_Mean, color = Scenario, fill = Scenario)) +
-      geom_ribbon(aes(ymin = Power_Lower, ymax = Power_Upper), alpha = 0.2, linetype = 0) +
-      geom_line(linewidth = 1.1) +
-      geom_hline(yintercept = 0.8, linetype = "dashed", color = "black") +
-      geom_vline(xintercept = input$power_ntran, linetype = "dotted") +
-      geom_point(data = point_data, size = 3) +
-      scale_y_continuous(labels = scales::percent, limits = c(0, 1)) +
-      scale_color_viridis_d() + scale_fill_viridis_d() +
-      # facet_wrap(~Scenario) +
-      labs(subtitle = paste("Based on", input$power_nctrl, "Control Sites"),
-           x = "Number of Transects", y = "Statistical Power") +
-      theme_minimal(base_size = 14) +
-      theme(legend.position = "right")
-  })
-  
-  # Plot 2: MDES Curve (no changes needed here)
-  output$mdesCurvePlot <- renderPlot({
-    df <- power_analysis_results()
-    validate(need(nrow(df) > 0, "Click 'Run Power Analysis' to generate plots."))
-    point_data <- df %>% filter(N_Transects == input$power_ntran)
-    ggplot(df, aes(x = N_Transects, y = MDES, color = Scenario, fill = Scenario)) +
-      geom_line(linewidth = 1.1) +
-      geom_hline(yintercept = input$power_uplift_pct / 100, linetype = "dashed", color = "black") +
-      annotate("text", x=max(df$N_Transects), y=input$power_uplift_pct / 100, 
-               label="Target Uplift", vjust=-0.5, hjust=1, color="black") +
-      geom_vline(xintercept = input$power_ntran, linetype = "dotted") +
-      geom_point(data = point_data, size = 3) +
-      scale_y_continuous(labels = scales::percent, limits=c(0, NA)) +
-      scale_color_viridis_d() + scale_fill_viridis_d() +
-      # facet_wrap(~Scenario) +
-      labs(subtitle = paste("Based on", input$power_nctrl, "Control Sites"),
-           x = "Number of Transects", y = "Detectable Uplift (at 80% Power)") +
-      theme_minimal(base_size = 14) +
-      theme(legend.position = "right")
-  })
-  
-# --- SERVER LOGIC FOR BACI Simulation Tab ----
-  observeEvent(input$sim_nyears, {
-    nyears <- input$sim_nyears
-    updateSliderInput(session, "sim_intervention_year", max = nyears, value = min(input$sim_intervention_year, nyears))
-    updateSliderInput(session, "sim_shock_year", max = nyears, value = min(input$sim_shock_year, nyears))
-  })
-  analysis_results <- eventReactive(input$run_sim, {
-    msg <- if(input$analysis_method == "Full Bayesian (Stan)") "Running full Bayesian simulation... this will be slow." else "Running fast approximation..."
-    showNotification(msg, type = "message", duration = 10)
-    method_params <- survey_methods_params %>% filter(Method == input$sim_method)
-    sd_precision <- method_params$SD_Precision
-    run_baci_analysis(analysis_method = input$analysis_method, n_sites_ctrl = input$sim_nctrl, n_transects = input$sim_ntran, n_years = input$sim_nyears, intervention_year = input$sim_intervention_year, true_uplift_pct = input$sim_uplift_pct, shock_type = input$sim_shock_type, shock_year = input$sim_shock_year, shock_magnitude_pct = input$sim_shock_magnitude, survey_precision_sd = sd_precision, spatial_patchiness_sd = input$sim_sd_spatial, temporal_variation_sd = input$sim_sd_temporal)
-  })
-  
-  output$uplift_card <- renderText({ req(analysis_results()); paste0(round(analysis_results()$composite_uplift * 100, 2), "%") })
-  output$prob_card <- renderText({ req(analysis_results()); scales::percent(analysis_results()$composite_prob, accuracy = 0.1) })
-  output$credit_card <- renderText({ req(analysis_results()); round(analysis_results()$composite_credit * 100, 1) })
-  
-  output$simulationPlot <- renderPlot({
-    req(input$metric_selector); plot_data <- analysis_results()$plot_data %>% filter(Metric == input$metric_selector)
-    y_label <- if (input$metric_selector == "Composite Index") "Reef Condition Index (Normalized)" else input$metric_selector
-    y_limits <- if (input$metric_selector == "Composite Index") c(0.5, 1.5) else c(0, 1)
-    y_formatter <- if (input$metric_selector == "Composite Index") scales::number_format(accuracy = 0.1) else scales::percent
-    p <- ggplot(plot_data, aes(x = Year, y = Mean, color = Site_Type, fill = Site_Type)) +
-      geom_vline(xintercept = input$sim_intervention_year, linetype = "dashed", color = "blue", linewidth = 1) +
-      geom_ribbon(aes(ymin = Lower_CI, ymax = Upper_CI), alpha = 0.2, linetype = 0) +
-      geom_line(linewidth = 1.2) +
-      annotate("text", x = input$sim_intervention_year, y = y_limits[2], label = "Intervention", color = "blue", hjust = -0.1, vjust = 1) +
-      coord_cartesian(ylim = y_limits, expand = FALSE) + scale_y_continuous(labels = y_formatter, name = y_label) +
-      scale_color_manual(values = c("Treatment" = "darkorange", "Control" = "gray40")) + scale_fill_manual(values = c("Treatment" = "darkorange", "Control" = "gray40")) +
-      labs(title = paste("Simulated Trend for:", input$metric_selector), subtitle = paste("Design:", input$sim_nctrl, "Control Sites,", input$sim_ntran, "Transects/Site,", "using", input$sim_method), color = "Site Type", fill = "Site Type") +
-      theme_minimal(base_size = 14) + theme(legend.position = "bottom")
-    if (input$sim_shock_type != "No Shock") { p <- p + geom_vline(xintercept = input$sim_shock_year, linetype = "dashed", color = "red", linewidth = 1) + annotate("text", x = input$sim_shock_year, y = y_limits[2] * 0.95, label = "Shock Event", color = "red", hjust = -0.1, vjust = 1) }
-    p
-  })
-  
-  output$resultsTable <- renderDT({
-    results_data <- analysis_results()$results_table
-    results_data <- results_data %>% mutate(Uplift_CI = paste0(round(Uplift_CI_Lower * 100, 1), "% to ", round(Uplift_CI_Upper * 100, 1), "%")) %>% select(Metric, Mean_Uplift, Uplift_CI, Prob_Real_Uplift, Credit_Score)
-    DT::datatable(results_data, rownames = FALSE, colnames = c("Metric", "Mean Annual Uplift", "95% CI of Uplift", "Probability of Uplift", "Credit Score"), options = list(dom = 't', pageLength = 10, scrollX = TRUE)) %>% formatPercentage(c("Mean_Uplift", "Prob_Real_Uplift"), digits = 1) %>% formatRound("Credit_Score", digits = 2)
-  })
-  
-  output$simulatedDataTable <- renderDT({
-    req(analysis_results()); raw_data <- analysis_results()$raw_data
-    DT::datatable(raw_data, filter = 'top', rownames = FALSE, options = list(pageLength = 10, scrollX = TRUE)) %>% formatPercentage(c("True_Value", "Observed_Value"), digits = 1)
-  })
-  
-  
-
-  output$dataTableExplorer <- renderDT({
-    DT::datatable(
-      filtered_model_data(),
-      rownames = FALSE,
-      options = list(pageLength = 10, scrollX = TRUE)
-    )
-  })
-}
-
-shinyApp(ui, server)
+  shinyApp(ui, server)
