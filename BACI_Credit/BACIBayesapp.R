@@ -245,14 +245,18 @@ ui <- page_navbar(
                                  selectInput("power_nctrl_selector", "Number of Control Sites to Plot", choices = 1:10, multiple = TRUE, selected = c(3, 5, 8))
                  ),
                  accordion_panel("Variability Assumptions", icon = bs_icon("graph-up-arrow"),
-                                 # NEW: Selector for the metric of interest
                                  selectInput("power_metric", "Metric to Analyze", 
                                              choices = c("Composite Index (RCI)", METRIC_DEFINITIONS$Metric)),
                                  
-                                 # UPDATED: These inputs are now auto-populated and disabled
-                                 numericInput("power_sd_spatial", "SD among Transects (within a Site)", 
+                                 # NEW: Slider to control the heterogeneity scenarios
+                                 sliderInput("power_sd_spatial_var_pct", "Spatial Heterogeneity Scenarios (% Variation)",
+                                             min = 0, max = 100, value = 50, step = 5,
+                                             post = "%"),
+                                 
+                                 # These are now just for display of the central value
+                                 numericInput("power_sd_spatial", "Central SD (among Transects)", 
                                               value = 0, min = 0, max = 0.5, step = 0.01),
-                                 numericInput("power_sd_temporal", "SD of Site Means (year-to-year)", 
+                                 numericInput("power_sd_temporal", "Central SD (year-to-year)", 
                                               value = 0, min = 0, max = 0.5, step = 0.01)
                  ),
                  accordion_panel("Survey Method & Cost", icon = bs_icon("gear"),
@@ -491,17 +495,12 @@ server <- function(input, output, session) {
   
   # --- SERVER LOGIC FOR TAB 2: Power Analysis ----
   
-  # Reactive to get the correct SDs for the chosen metric
+  # Reactive to get the correct CENTRAL SDs for the chosen metric
   selected_metric_params <- reactive({
+    # ... (this reactive remains the same as before) ...
     metric_name <- req(input$power_metric)
-    
     if (metric_name == "Composite Index (RCI)") {
-      avg_vars <- METRIC_DEFINITIONS %>%
-        summarise(
-          Spatial_SD = sqrt(mean(Spatial_SD^2)),
-          Temporal_SD = sqrt(mean(Temporal_SD^2))
-        )
-      # For RCI, the type is composite
+      avg_vars <- METRIC_DEFINITIONS %>% summarise(Spatial_SD = sqrt(mean(Spatial_SD^2)), Temporal_SD = sqrt(mean(Temporal_SD^2)))
       return(list(spatial = avg_vars$Spatial_SD, temporal = avg_vars$Temporal_SD, type = "Composite"))
     } else {
       params <- METRIC_DEFINITIONS %>% filter(Metric == metric_name)
@@ -509,109 +508,111 @@ server <- function(input, output, session) {
     }
   })
   
-  # Reactive to get the correct SURVEY PRECISION based on the selected metric type
+  # ... (selected_survey_precision and observe reactives remain the same) ...
   selected_survey_precision <- reactive({
     params <- selected_metric_params()
-    
     benthic_prec <- benthic_survey_params$SD_Precision[benthic_survey_params$Method == req(input$power_method_benthic)]
     fish_prec <- fish_survey_params$SD_Precision[fish_survey_params$Method == req(input$power_method_fish)]
-    
-    if (params$type == "Benthic") {
-      return(benthic_prec)
-    } else if (params$type == "Fish") {
-      return(fish_prec)
-    } else { # Composite
-      # For the RCI, the measurement error is a combination of both survey types.
-      # We will average the variance of the two selected methods.
-      return(sqrt(mean(c(benthic_prec^2, fish_prec^2))))
-    }
+    if (params$type == "Benthic") return(benthic_prec)
+    else if (params$type == "Fish") return(fish_prec)
+    else return(sqrt(mean(c(benthic_prec^2, fish_prec^2))))
   })
   
-  # Auto-update the UI numeric inputs
   observe({
     params <- selected_metric_params()
     updateNumericInput(session, "power_sd_spatial", value = round(params$spatial, 3))
     updateNumericInput(session, "power_sd_temporal", value = round(params$temporal, 3))
   })
   
-  # Reactive that calculates key values for the top cards
-  power_card_calcs <- reactive({
-    req(input$power_nctrl, input$power_ntran, selected_metric_params())
+  # This eventReactive is now significantly updated to run scenarios
+  power_analysis_results <- eventReactive(input$run_power_analysis, {
+    showNotification("Running power analysis for all scenarios...", type = "message", duration = 5)
     
     params <- selected_metric_params()
-    sd_spatial <- params$spatial
+    sd_precision <- selected_survey_precision()
+    variation_pct <- input$power_sd_spatial_var_pct / 100
+    
+    # 1. Define the three spatial heterogeneity scenarios
+    scenarios <- tibble(
+      Scenario = factor(c("Low Heterogeneity", "Medium (Observed)", "High Heterogeneity"), 
+                        levels = c("Low Heterogeneity", "Medium (Observed)", "High Heterogeneity")),
+      spatial_sd_val = c(
+        params$spatial * (1 - variation_pct),
+        params$spatial,
+        params$spatial * (1 + variation_pct)
+      )
+    )
+    
+    # 2. Use purrr::pmap to run the power analysis for each scenario
+    results <- scenarios %>%
+      mutate(
+        analysis = pmap(list(spatial_sd_val), ~ run_power_analysis(
+          target_uplift_pct   = req(input$power_uplift_pct),
+          monitoring_years    = req(input$power_nyears),
+          monitoring_frequency= req(input$power_frequency),
+          survey_precision_sd = sd_precision,
+          peak_spatial_sd     = ..1, # This passes the spatial_sd_val for the current row
+          temporal_sd         = params$temporal,
+          baseline_cover_pct  = 30,
+          n_ctrl_values       = as.numeric(req(input$power_nctrl_selector)),
+          n_transect_values   = 1:20
+        ))
+      ) %>%
+      select(-spatial_sd_val) %>% # No longer needed
+      unnest(analysis) # Expand the results
+    
+    return(results)
+  })
+  
+  # The cards should now report on the CENTRAL ("Medium") scenario only
+  power_card_calcs <- reactive({
+    # ... (This logic is mostly the same but now we only calculate for the medium scenario)
+    req(input$power_nctrl, input$power_ntran, selected_metric_params())
+    params <- selected_metric_params()
+    sd_spatial <- params$spatial # Use the central value
     sd_temporal <- params$temporal
     sd_precision <- selected_survey_precision()
-    
     nyears <- input$power_nyears
     time_points <- if (input$power_frequency == "Annual") seq(0, nyears, by = 1) else seq(0, nyears, by = 2)
     sum_sq_t <- sum((time_points - mean(time_points))^2)
-    
     var_within_site <- sd_spatial^2 + sd_precision^2
     var_site_year <- (var_within_site / input$power_ntran) + sd_temporal^2
     se_slope <- sqrt((var_site_year / sum_sq_t) * (1 + 1 / input$power_nctrl))
-    
     mdes <- calculate_mdes(power = 0.80, df = input$power_nctrl, se_slope = se_slope)
     
-    # NEW COST CALCULATION: Sums the cost of BOTH survey methods
+    # Cost calculation
     benthic_cost <- benthic_survey_params$Cost_per_Transect[benthic_survey_params$Method == req(input$power_method_benthic)]
     fish_cost <- fish_survey_params$Cost_per_Transect[fish_survey_params$Method == req(input$power_method_fish)]
     total_transect_cost <- benthic_cost + fish_cost
-    
     n_visits <- nyears * (if (input$power_frequency == "Annual") 1 else 0.5)
-    total_cost <- n_visits * ((1 + input$power_nctrl) * input$cost_per_site_visit +
-                                (1 + input$power_nctrl) * input$power_ntran * total_transect_cost)
+    total_cost <- n_visits * ((1 + input$power_nctrl) * input$cost_per_site_visit + (1 + input$power_nctrl) * input$power_ntran * total_transect_cost)
     
     list(mdes = mdes, total_cost = total_cost)
   })
   
-  # Render text for the four summary cards
-  output$power_mdes_txt <- renderText({
-    res <- power_card_calcs()
-    if (is.na(res$mdes)) return("N/A")
-    paste0(scales::percent(res$mdes, accuracy = 0.1), " / year")
-  })
+  # ... (The renderText outputs for the cards remain the same) ...
+  output$power_mdes_txt <- renderText({ res <- power_card_calcs(); if(is.na(res$mdes)) "N/A" else paste0(scales::percent(res$mdes, 0.1), " / year") })
+  output$power_total_cost_txt <- renderText({ paste0("$", prettyNum(power_card_calcs()$total_cost, big.mark = ",")) })
+  output$power_uplift_txt <- renderText({ paste0(input$power_uplift_pct, "% per year") })
   
-  output$power_total_cost_txt <- renderText({
-    paste0("$", prettyNum(power_card_calcs()$total_cost, big.mark = ","))
-  })
-  
-  output$power_uplift_txt <- renderText({
-    paste0(input$power_uplift_pct, "% per year")
-  })
-  
-  # This eventReactive now runs the main simulation for the plot
-  power_analysis_results <- eventReactive(input$run_power_analysis, {
-    showNotification("Running power analysis simulation...", type = "message", duration = 5)
-    params <- selected_metric_params()
-    sd_precision <- selected_survey_precision()
-    
-    run_power_analysis(
-      target_uplift_pct = req(input$power_uplift_pct),
-      monitoring_years = req(input$power_nyears),
-      monitoring_frequency = req(input$power_frequency),
-      survey_precision_sd = sd_precision,
-      peak_spatial_sd = params$spatial,
-      temporal_sd = params$temporal,
-      baseline_cover_pct = 30,
-      n_ctrl_values = as.numeric(req(input$power_nctrl_selector)),
-      n_transect_values = 1:20
-    )
-  })
-  
+  # The power text must also filter for the central scenario
   output$power_avg_power_txt <- renderText({
     res <- tryCatch(power_analysis_results(), error = function(e) NULL)
     validate(need(!is.null(res), "Click 'Run Power Analysis'"))
-    pd <- res %>% filter(N_Controls == input$power_nctrl, N_Transects == input$power_ntran)
+    
+    pd <- res %>% 
+      filter(
+        Scenario == "Medium (Observed)", # Filter for the central case
+        N_Controls == input$power_nctrl, 
+        N_Transects == input$power_ntran
+      )
     validate(need(nrow(pd) > 0, "Adjust design and re-run"))
-    paste0(
-      scales::percent(pd$Power_Mean, 0.1),
-      " (", scales::percent(pd$Power_Lower, 0.1),
-      " – ", scales::percent(pd$Power_Upper, 0.1), ")"
-    )
+    
+    paste0(scales::percent(pd$Power_Mean, 0.1), " (", scales::percent(pd$Power_Lower, 0.1), " – ", scales::percent(pd$Power_Upper, 0.1), ")")
   })
   
-  # The plot function is simplified to no longer need faceting by baseline
+  
+  # The plot function is now updated to show the different scenarios
   output$powerCurvePlot <- renderPlot({
     df <- power_analysis_results()
     validate(need(nrow(df) > 0, "Click 'Run' to generate results."))
@@ -622,22 +623,27 @@ server <- function(input, output, session) {
     point_data <- plot_data %>%
       filter(N_Controls == input$power_nctrl, N_Transects == input$power_ntran)
     
-    ggplot(plot_data, aes(x = N_Transects, y = Power_Mean)) +
-      geom_ribbon(aes(ymin = Power_Lower, ymax = Power_Upper), fill = "steelblue", alpha = 0.2) +
-      geom_line(color = "steelblue", linewidth = 1.2) +
+    ggplot(plot_data, aes(x = N_Transects, y = Power_Mean, color = Scenario, fill = Scenario)) +
+      geom_ribbon(aes(ymin = Power_Lower, ymax = Power_Upper), alpha = 0.2, linetype = 0) +
+      geom_line(linewidth = 1.1) +
       geom_vline(xintercept = input$power_ntran, linetype = "dotted", color = "gray50") +
-      geom_point(data = point_data, size = 3, color = "darkblue") +
+      # Highlight the points for the selected design on all three curves
+      geom_point(data = point_data, size = 3) +
       geom_hline(yintercept = 0.8, linetype = "dashed", color = "black") +
       facet_wrap(~Control_Sites) +
       scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
       scale_x_continuous(breaks = scales::pretty_breaks()) +
+      # Use a nice color scale for the scenarios
+      scale_color_viridis_d(name = "Heterogeneity Scenario") +
+      scale_fill_viridis_d(name = "Heterogeneity Scenario") +
       labs(
         title = paste("Power to Detect a", input$power_uplift_pct, "% Annual Uplift in", input$power_metric),
-        subtitle = paste("Using:", input$power_method_benthic, "&", input$power_method_fish),
+        subtitle = paste("Scenarios show power under low, medium (observed), and high spatial variability."),
         x = "Number of Transects per Site",
         y = "Statistical Power"
       ) +
-      theme_minimal(base_size = 14)
+      theme_minimal(base_size = 14) +
+      theme(legend.position = "bottom")
   })
   
 # --- SERVER LOGIC FOR BACI Simulation Tab ----
