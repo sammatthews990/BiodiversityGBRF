@@ -266,10 +266,10 @@ ui <- page_navbar(
                  layout_columns(
                    col_widths = c(3, 3, 3, 3),
                    # NEW: Value of Information Card
-                   value_box(title = "Most Cost-Effective Next Step", value = textOutput("voi_recommendation_txt"), showcase = bs_icon("lightbulb-fill"), theme_color="success"),
-                   value_box(title = "Detectable Uplift Range", value = textOutput("power_mdes_txt"), showcase = bs_icon("search-heart")),
-                   value_box(title = "Power Range for Target", value = textOutput("power_avg_power_txt"), showcase = bs_icon("check-circle-fill")),
-                   value_box(title = "Estimated Total Cost", value = textOutput("power_total_cost_txt"), showcase = bs_icon("cash-coin"), theme_color = "primary")
+                   value_box(title = "Most Cost-Effective Next Step", value = tags$p(textOutput("voi_recommendation_txt"),style = "font-size: 300%;") , showcase = bs_icon("lightbulb-fill", size = "80%"), theme_color="success", max_height = "150px"),
+                   value_box(title = "Detectable Uplift Range", value = tags$p(textOutput("power_mdes_txt"),style = "font-size: 300%;"), showcase = bs_icon("search-heart",size = "80%"), max_height = "150px"),
+                   value_box(title = "Power Range for Target", value = tags$p(textOutput("power_avg_power_txt"),style = "font-size: 300%;"), showcase = bs_icon("check-circle-fill",size = "80%"), max_height = "150px"),
+                   value_box(title = "Estimated Total Cost", value = tags$p(textOutput("power_total_cost_txt"),style = "font-size: 300%;"), showcase = bs_icon("cash-coin",size = "80%"), theme_color = "primary", max_height = "150px")
                  )
              ),
              # # NEW: Side-by-side plot layout
