@@ -64,6 +64,7 @@ if (!exists("METRIC_DEFINITIONS")) {
 #' @param n_sims The number of Monte Carlo simulations to run for estimating confidence intervals on the power.
 #' @return A tibble containing the calculated power (Power_Mean) and confidence intervals (Power_Lower, Power_Upper) for each combination of input parameters.
 
+# ENHANCED version of run_power_analysis
 run_power_analysis <- function(
     target_uplift_pct,
     monitoring_years,
@@ -71,65 +72,42 @@ run_power_analysis <- function(
     survey_precision_sd,
     peak_spatial_sd,
     temporal_sd,
-    baseline_cover_pct,
-    n_ctrl_values,
+    n_ctrl_sites, # Changed from a vector to a single value
     n_transect_values = 1:20,
-    n_sims = 10000
+    n_sims = 1000 # Reduced for speed in interactive use
 ) {
-  
-  # --- 1. Set up parameters ---
   annual_trend <- target_uplift_pct / 100
-  baselines <- baseline_cover_pct / 100
-  
-  # Determine the time points for the regression based on frequency
-  time_points <- if (monitoring_frequency == "Annual") {
-    seq(0, monitoring_years, by = 1)
-  } else {
-    seq(0, monitoring_years, by = 2)
-  }
+  time_points <- if (monitoring_frequency == "Annual") seq(0, monitoring_years, by = 1) else seq(0, monitoring_years, by = 2)
   sum_sq_t <- sum((time_points - mean(time_points))^2)
   
-  # --- 2. Create all scenarios to be tested ---
-  scenarios <- tidyr::crossing(
-    N_Controls = n_ctrl_values,
-    N_Transects = n_transect_values,
-    Baseline_Cover = baselines
-  )
-  
-  # --- 3. Define the core calculation for a single scenario ---
-  run_one_scenario <- function(n_ctrl, n_tran, baseline) {
-    # Calculate the dynamic spatial SD based on the baseline cover
-    dynamic_sd_spatial <- calculate_dynamic_sd(p = baseline, anchor_p = 0.5, anchor_sd = peak_spatial_sd)
+  # This function now runs for each transect value
+  run_one_scenario <- function(n_tran) {
+    var_within_site <- peak_spatial_sd^2 + survey_precision_sd^2
+    var_site_year <- (var_within_site / n_tran) + temporal_sd^2
+    se_slope <- sqrt((var_site_year / sum_sq_t) * (1 + 1 / n_ctrl_sites))
     
-    # Combine sources of variance
-    total_transect_sd <- sqrt(dynamic_sd_spatial^2 + survey_precision_sd^2)
-    var_site_year <- (total_transect_sd^2 / n_tran) + temporal_sd^2
-    
-    # Calculate the standard error of the slope (interaction term)
-    se_slope <- sqrt((var_site_year / sum_sq_t) * (1 + 1 / n_ctrl))
-    
-    # Calculate power using the non-centrality parameter of the t-distribution
+    # 1. Calculate Power for the target uplift
     ncp <- annual_trend / se_slope
-    # The probability of rejecting the null hypothesis (i.e., power)
-    power_estimate <- pt(qt(0.975, df = n_ctrl), df = n_ctrl, ncp = ncp, lower.tail = FALSE)
+    power_estimate <- pt(qt(0.975, df = n_ctrl_sites), df = n_ctrl_sites, ncp = ncp, lower.tail = FALSE)
+    ci <- tryCatch(binom.test(round(power_estimate * n_sims), n_sims)$conf.int, error = function(e) c(0,0))
     
-    # Simulate confidence intervals for this power estimate
-    detected <- rbinom(n_sims, 1, power_estimate)
-    ci <- binom.test(sum(detected), n_sims)$conf.int
+    # 2. Calculate MDES for 80% power
+    mdes <- calculate_mdes(power = 0.80, df = n_ctrl_sites, se_slope = se_slope)
     
-    tibble(Power_Mean = mean(detected), Power_Lower = ci[1], Power_Upper = ci[2])
+    tibble(
+      N_Transects = n_tran,
+      Power_Mean = power_estimate,
+      Power_Lower = ci[1],
+      Power_Upper = ci[2],
+      MDES = mdes
+    )
   }
   
-  # --- 4. Run the calculation across all scenarios and return results ---
-  results <- scenarios %>%
-    mutate(
-      results = purrr::pmap(list(N_Controls, N_Transects, Baseline_Cover), run_one_scenario)
-    ) %>%
-    unnest(results)
+  # Use map_dfr to iterate over all transect values and row-bind the results
+  results <- purrr::map_dfr(n_transect_values, run_one_scenario)
   
   return(results)
 }
-
 #' Calculate the Minimum Detectable Effect Size (MDES)
 #'
 #' @param power The desired statistical power (e.g., 0.80).
