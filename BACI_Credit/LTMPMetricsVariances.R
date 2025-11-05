@@ -7,6 +7,9 @@ library(dplyr)    # For data manipulation
 library(tidyr)    # For data cleaning
 library(readr)    # For loading data
 library(broom)    # For tidying model outputs
+library(ggplot2)
+library(purrr)
+
 
 # For demonstration, create a sample dataframe based on your image.
 # In your real analysis, you would replace this with:
@@ -29,19 +32,27 @@ clean_data <- full_data %>%
     Site = SITE_NO,
     Coral_Cover_raw = coral, # Keep raw for conversion to proportion
     Structural_Complexity = Complexity,
+    Coral_Diversity_Raw = simpD,
     Fish_Biomass_raw = `f.biomass`, # Keep raw for log transform
-    Fish_Diversity_raw = simpD,
+    Fish_Diversity_raw = FsimpD,
     Algal_Cover_raw = CCAratio# Keep raw for logit transform
   ) %>%
   # 3. APPLY TRANSFORMATIONS
   mutate(
     # Log transform for biomass. Add 1 to handle potential zeros.
-    Fish_Biomass = log(Fish_Biomass_raw + 1),
-    # Convert percentages to proportions and then logit transform
-    Coral_Cover = logit_transform(Coral_Cover_raw / 100),
-    Algal_Cover = logit_transform(Algal_Cover_raw / 100),
-    Fish_Diversity = logit_transform(Fish_Diversity_raw)
-    # Note: Structural_Complexity is left on its original scale
+    Fish_Biomass_log = log(Fish_Biomass_raw + 1),
+    Fish_Biomass_sc = (Fish_Biomass_log - min(Fish_Biomass_log)) / 
+      (max(Fish_Biomass_log)-min(Fish_Biomass_log)),
+    Coral_Cover_sc = (Coral_Cover_raw - min(Coral_Cover_raw)) / 
+      (max(Coral_Cover_raw)-min(Coral_Cover_raw)),
+    Algal_Cover_sc = (Algal_Cover_raw - min(Algal_Cover_raw)) / 
+      (max(Algal_Cover_raw)-min(Algal_Cover_raw)),
+    Fish_Diversity_sc = (Fish_Diversity_raw - min(Fish_Diversity_raw)) / 
+      (max(Fish_Diversity_raw)-min(Fish_Diversity_raw)),
+    Coral_Diversity_sc = (Coral_Diversity_Raw - min(Coral_Diversity_Raw)) / 
+      (max(Coral_Diversity_Raw)-min(Coral_Diversity_Raw)),
+    Structural_Complexity_sc = (Structural_Complexity - min(Structural_Complexity, na.rm = T)) / 
+      (max(Structural_Complexity, na.rm = T)-min(Structural_Complexity, na.rm = T))
   ) %>%
   # 4. Select only the final columns needed for analysis
   select(
@@ -50,11 +61,14 @@ clean_data <- full_data %>%
     Site,
     Year,
     # The five transformed metrics
-    Coral_Cover,
-    Structural_Complexity,
-    Algal_Cover,
-    Fish_Biomass,
-    Fish_Diversity
+    Coral_Cover_sc,
+    Coral_Diversity_sc,
+    Structural_Complexity_sc,
+    Algal_Cover_sc,
+    Fish_Biomass_sc,
+    Fish_Diversity_sc#,
+    # Coral_Cover_raw, Algal_Cover_raw, Fish_Diversity_raw,
+    # Fish_Biomass_raw, Coral_Diversity_Raw
   ) %>%
   # 5. Pivot to long format for modeling
   pivot_longer(
@@ -64,10 +78,32 @@ clean_data <- full_data %>%
   ) %>%
   filter(!is.na(Value))
 
+# Naive SD calculations for comparison
+sds_naive <- clean_data %>%
+  group_by(Sector, Metric, Year, Reef) %>%
+  summarise(Mean = mean(Value, na.rm = T),
+            Naive_SD = sd(Value, na.rm = TRUE), .groups = "drop")
+sds_naive_sum <- sds_naive %>%
+  group_by(Sector, Metric) %>%
+  summarise(Mean_Naive_SD = round(mean(Naive_SD, na.rm = T),3), .groups = "drop") %>%
+  filter(Metric %in% c("Coral_Cover_sc", "Fish_Biomass_sc", "Algal_Cover_sc",
+                       "Coral_Diversity_sc", "Fish_Diversity_sc", "Structural_Complexity_sc"))
+ggplot(sds_naive, aes(x = Sector, y = Naive_SD)) +
+  geom_boxplot(position = "dodge") +
+  theme_minimal() +
+  labs(title = "Naive Standard Deviation by Metric and Sector",
+       x = "Metric",
+       y = "Naive SD") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  facet_wrap(~Metric, scales = "free_y")
 
-
+ggplot(sds_naive, aes(x=Mean, y=Naive_SD)) +
+  geom_point() +
+  geom_smooth(method = "lm")+
+  facet_wrap(~Metric, scales="free")
 cat("--- Data successfully cleaned and prepared ---\n")
 print(head(clean_data))
+
 
 
 # --- 2. CALCULATE SPATIAL SD (WITHIN-SITE VARIANCE) ---
@@ -77,34 +113,65 @@ print(head(clean_data))
 # This is the "residual" variance in a hierarchical model.
 
 Sectoral_spatial_sd <- clean_data %>%
-  group_by(Sector, Metric) %>%
+  # STEP 1: Add YEAR to the grouping to isolate within-year variance
+  group_by(Sector, Metric, Year) %>%
   summarise(
-    # We will try to fit the full model, but catch any warnings.
+    # STEP 2: Fit the model for each year's data subset.
     model_fit = list(
       tryCatch(
-        # 1. Attempt the full, preferred hierarchical model
         lmer(Value ~ 1 + (1 | Reef / Site), data = pick(everything())),
-        
-        # 2. If ANY warning is produced, this code will run instead
         warning = function(w) {
-          # Print a message to the console so we know simplification happened
-          message(paste("Warning in", cur_group()$Sector, cur_group()$Metric, ":", w$message))
-          message("--> Model is singular or failed to converge. Fitting simpler model (1 | Site).")
-          
-          # 3. Fit the simpler, more robust model
+          message(paste("Warning in", cur_group()$Sector, cur_group()$Metric, cur_group()$Year, "... Fitting simpler model."))
           lmer(Value ~ 1 + (1 | Site), data = pick(everything()))
         }
       )
     ),
     .groups = "drop"
   ) %>%
-  # The rest of the logic for extracting variance remains the same.
-  # The simpler model will still have a "Residual" variance component.
+  # This gives us a yearly estimate of Spatial_SD
   mutate(
     variances = map(model_fit, ~ as.data.frame(VarCorr(.x))),
-    Spatial_SD = map_dbl(variances, ~ .x$sdcor[.x$grp == "Residual"])
+    Spatial_SD_yearly = map_dbl(variances, ~ .x$sdcor[.x$grp == "Residual"])
   ) %>%
-  select(Sector, Metric, Spatial_SD)
+  
+  # STEP 3: Pool the yearly estimates to get a final, robust Spatial_SD
+  group_by(Sector, Metric) %>%
+  summarise(
+    # First, calculate the mean of the variances (sd^2)
+    Mean_of_Variances = mean(Spatial_SD_yearly^2, na.rm = TRUE),
+    # Then, take the square root of the mean variance
+    Spatial_SD = round(sqrt(Mean_of_Variances),4),
+    .groups = "drop"
+  ) %>%
+  select(Sector, Metric, Spatial_SD) # Keep only the final columns
+
+
+cat("\n--- Spatial SD (Within-Site) Calculated ---\n")
+print(Sectoral_spatial_sd)
+
+Sectoral_spatial_sd_includingyears <- clean_data %>%
+  # STEP 1: Add YEAR to the grouping to isolate within-year variance
+  group_by(Sector, Metric) %>%
+  summarise(
+    # STEP 2: Fit the model for each year's data subset.
+    model_fit = list(
+      tryCatch(
+        lmer(Value ~ 1 + (1 | Reef / Site), data = pick(everything())),
+        warning = function(w) {
+          message(paste("Warning in", cur_group()$Sector, cur_group()$Metric, cur_group()$Year, "... Fitting simpler model."))
+          lmer(Value ~ 1 + (1 | Site), data = pick(everything()))
+        }
+      )
+    ),
+    .groups = "drop"
+  ) %>%
+  # This gives us a yearly estimate of Spatial_SD
+  mutate(
+    variances = map(model_fit, ~ as.data.frame(VarCorr(.x))),
+    Spatial_SD = round(map_dbl(variances, ~ .x$sdcor[.x$grp == "Residual"]),3)
+  ) %>%
+  select(Sector, Metric, Spatial_SD) # Keep only the final columns
+
 
 cat("\n--- Spatial SD (Within-Site) Calculated ---\n")
 print(Sectoral_spatial_sd)
@@ -136,14 +203,14 @@ Sectoral_spatial_sd <- Sectoral_spatial_sd |>
     Sector %in% c("CB", "SW", "PO") ~ "Southern"
   ))
 
-ggplot(Sectoral_spatial_sd, aes(x = Metric, y = Spatial_SD, fill = Sector)) +
+ggplot(Sectoral_spatial_sd, aes(x = Sector, y = Spatial_SD, fill = Sector)) +
   geom_bar(stat = "identity", position = "dodge") +
   theme_minimal() +
   labs(title = "Spatial Standard Deviation by Metric and Region",
        x = "Metric",
        y = "Spatial SD") +
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
-  facet_wrap(~Region)
+  facet_wrap(~Metric)
 
 ggplot(Sectoral_spatial_sd, aes(x = Sector, y = Spatial_SD, fill = Sector)) +
   geom_bar(stat = "identity", position = "dodge") +

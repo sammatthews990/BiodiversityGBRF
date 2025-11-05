@@ -17,16 +17,22 @@ library(INLA)
 # 1. REPLACE survey_methods_params with TWO new tables
 benthic_survey_params <- tribble(
   ~Method,                   ~SD_Precision, ~Cost_per_Transect,
-  "Benthic Photo Transects", 0.045,         50,
-  "Detailed Orthomosaic",    0.020,         200,
-  "ReefScan (AI Towed)",     0.035,         35
+  # "Benthic Photo Transects", 0.045,         50,
+  # "Detailed Orthomosaic",    0.020,         200,
+  # "ReefScan (AI Towed)",     0.035,         35
+  "Benthic Photo Transects", 0.01,         50,
+  "Detailed Orthomosaic",    0.01,         200,
+  "ReefScan (AI Towed)",     0.01,         35
 )
 
 fish_survey_params <- tribble(
   ~Method,                          ~SD_Precision, ~Cost_per_Transect,
-  "Underwater Visual Census (UVC)", 0.20,          40,
-  "Diver Operated Video (DOV)",     0.18,          60,
-  "Baited Remote Video (BRUV)",     0.25,          75
+  # "Underwater Visual Census (UVC)", 0.20,          40,
+  # "Diver Operated Video (DOV)",     0.18,          60,
+  # "Baited Remote Video (BRUV)",     0.25,          75
+  "Underwater Visual Census (UVC)", 0.01,          40,
+  "Diver Operated Video (DOV)",     0.01,          60,
+  "Baited Remote Video (BRUV)",     0.01,          75
 )
 
 
@@ -34,12 +40,12 @@ fish_survey_params <- tribble(
 if (!exists("METRIC_DEFINITIONS")) {
   METRIC_DEFINITIONS <- tribble(
     ~Metric,                ~Metric_Type, ~Mean_Baseline, ~Spatial_SD, ~Temporal_SD,
-    "Coral Cover",          "Benthic",    0.30,           0.05,        0.04,
-    "Structural Complexity","Benthic",    0.40,           0.06,        0.05,
-    "Algal Cover",          "Benthic",    0.20,           0.08,        0.06,
-    "Fish Biomass",         "Fish",       0.50,           0.12,        0.08,
-    "Fish Diversity",       "Fish",       0.60,           0.07,        0.07,
-    "Invertebrate Density", "Benthic",    0.35,           0.10,        0.09 # Often benthic surveys
+    "Coral Cover",          "Benthic",    0.40,           0.078,        0.01,
+    "Structural Complexity","Benthic",    0.40,           0.085,        0.04,
+    "Algal Cover",          "Benthic",    0.40,           0.083,        0.01,
+    "Fish Biomass",         "Fish",       0.40,           0.061,        0.02,
+    "Fish Diversity",       "Fish",       0.40,           0.123,        0.03,
+    "Coral Diversity",      "Benthic",    0.40,           0.085,        0.01 
   )
 }
 
