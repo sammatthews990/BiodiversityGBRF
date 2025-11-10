@@ -37,17 +37,16 @@ fish_survey_params <- tribble(
 
 
 # 2. UPDATE METRIC_DEFINITIONS to include a Metric_Type column
-if (!exists("METRIC_DEFINITIONS")) {
   METRIC_DEFINITIONS <- tribble(
     ~Metric,                ~Metric_Type, ~Mean_Baseline, ~Spatial_SD, ~Temporal_SD,
+    "RCI",                  "Benthic",    0.40,           0.039,        0.008,
     "Coral Cover",          "Benthic",    0.40,           0.078,        0.01,
     "Structural Complexity","Benthic",    0.40,           0.085,        0.04,
     "Algal Cover",          "Benthic",    0.40,           0.083,        0.01,
     "Fish Biomass",         "Fish",       0.40,           0.061,        0.02,
     "Fish Diversity",       "Fish",       0.40,           0.123,        0.03,
-    "Coral Diversity",      "Benthic",    0.40,           0.085,        0.01 
+    "Coral Diversity",      "Benthic",    0.40,           0.085,        0.01
   )
-}
 
 # ... (existing functions and METRIC_DEFINITIONS) ...
 
@@ -56,7 +55,7 @@ if (!exists("METRIC_DEFINITIONS")) {
 #' This function calculates the statistical power to detect a specified annual
 #' trend (uplift) given a set of survey design parameters and variability assumptions.
 #' It iterates through multiple scenarios for the number of control sites, transects,
-#' and baseline conditions.
+#' and baseline conditions.a
 #'
 #' @param target_uplift_pct The annual percentage uplift you want to be able to detect (e.g., 3 for 3%).
 #' @param monitoring_years The total number of years for the monitoring program.
