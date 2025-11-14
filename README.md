@@ -32,10 +32,6 @@ This repository contains modelling utilities, data, and interactive dashboards u
    )
    install.packages(setdiff(required_packages, rownames(installed.packages())))
    ```
-4. **Install INLA** from the project repository (if not already available):
-   ```r
-   install.packages("INLA", repos = c(getOption("repos"), INLA = "https://inla.r-inla-download.org/R/stable"))
-   ```
 
 ## Configuration
 The Shiny application reads configuration values and inputs from objects defined at the top of `BACI_Credit/BACIBayesapp.R`.
@@ -66,5 +62,3 @@ The `BiodiversityScenarioExplorer.pbix` file can be opened in Microsoft Power BI
 - When adding new data files, document their provenance and schema in this README or a dedicated data dictionary.
 - Consider adding unit tests or validation scripts (e.g. via `testthat`) if you extend the analysis functions.
 
-## License
-Add licensing details here (e.g. proprietary, MIT, etc.) once confirmed with project stakeholders.
