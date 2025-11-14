@@ -13,7 +13,9 @@ library(purrr)
 
 # For demonstration, create a sample dataframe based on your image.
 # In your real analysis, you would replace this with:
-full_data <- readr::read_csv("monitoringdata/metricsLTMP_trimmed.csv")
+full_data <- readr::read_csv("BACI_Credit/monitoringdata/metricsLTMP.csv") |>
+  dplyr::select(1:16, f.richness, f.biomass, FsimpD, simpD) |>
+  dplyr::mutate(CCARatio = cca/(algae+turf+cca))
 
 
 # Helper function for a scaled logit transformation to handle exact 0s and 1s
